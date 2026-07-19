@@ -3,6 +3,7 @@ import { Server as SocketIOServer } from "socket.io";
 import IORedis from "ioredis";
 import { logger } from "@/lib/logger";
 import { REALTIME_CHANNEL, type RealtimeEvent } from "@/lib/realtime/events";
+import { verifyJwt } from "@/lib/auth/jwt";
 
 /**
  * Отдельный Socket.IO-сервер (ТЗ §23). Подписан на Redis pub/sub и раздаёт
@@ -26,18 +27,21 @@ const io = new SocketIOServer(httpServer, {
 });
 
 interface Handshake {
-  organizationId?: string;
-  userId?: string;
   token?: string;
 }
 
+const AUTH_SECRET = process.env.AUTH_SECRET ?? "";
+
 io.use((socket, next) => {
   const auth = (socket.handshake.auth ?? {}) as Handshake;
-  const organizationId = auth.organizationId ?? (socket.handshake.query.organizationId as string | undefined);
-  if (!organizationId) return next(new Error("organizationId required"));
-  // TODO (Этап 7): верифицировать JWT token и извлечь org/user из него.
-  socket.data.organizationId = organizationId;
-  socket.data.userId = auth.userId ?? (socket.handshake.query.userId as string | undefined);
+  const token = auth.token ?? (socket.handshake.query.token as string | undefined);
+  if (!token || !AUTH_SECRET) return next(new Error("auth token required"));
+  const payload = verifyJwt(token, AUTH_SECRET);
+  if (!payload) return next(new Error("invalid token"));
+  // org/user берём ТОЛЬКО из подписанного токена (§24), не из произвольных полей.
+  socket.data.organizationId = payload.org;
+  socket.data.userId = payload.sub;
+  socket.data.userName = payload.name ?? "";
   next();
 });
 
@@ -54,6 +58,18 @@ io.on("connection", (socket) => {
   });
   socket.on("conversation:unsubscribe", (conversationId: string) => {
     socket.leave(`conv:${orgId}:${conversationId}`);
+  });
+
+  // «Печатает» (§19): широковещаем в комнату диалога, кроме отправителя.
+  socket.on("typing", (data: { conversationId?: string; typing?: boolean }) => {
+    if (!data?.conversationId) return;
+    socket.to(`conv:${orgId}:${data.conversationId}`).emit("user.typing", {
+      event: "user.typing",
+      organizationId: orgId,
+      conversationId: data.conversationId,
+      payload: { userId, userName: socket.data.userName, typing: data.typing !== false },
+      ts: new Date().toISOString(),
+    });
   });
 
   socket.on("disconnect", () => {

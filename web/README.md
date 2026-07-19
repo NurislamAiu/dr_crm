@@ -18,7 +18,10 @@ Flutter**, и тонкая веб-админка (настройка webhook, д
 | 5 | отправка (POST /v3/message), crmMessageId, статусы, retry | ✅ (e2e с mock) |
 | 4 | Flutter-приложение (чаты/composer/статусы) | ✅ (analyze+тесты) |
 | 6 | медиа (S3/MinIO): входящие download, отправка вложений, signed URL | ✅ (e2e) |
-| 7–8 | RBAC/JWT, sync/мониторинг/тесты | ⏳ |
+| 7 | JWT-логин, RBAC, захват/передача/закрытие, заметки, «печатает» | ✅ (e2e) |
+| 8 | sync users/contacts, диагностика §25, тесты, hardening | ⏳ |
+
+Авторизация: `POST /api/auth/login` → JWT (Bearer). DEV-логин: `manager@example.com` / `password`.
 
 API для приложения:
 - `GET /api/conversations`, `GET /api/conversations/:id/messages`
@@ -26,6 +29,9 @@ API для приложения:
 - `POST /api/conversations/:id/messages/send-media` (multipart: `file`, `caption?`)
 - `POST /api/messages/:id/retry`
 - `GET /api/attachments/:id/url` (короткий signed URL вложения)
+- `POST /api/auth/login` (email/password → JWT)
+- `POST /api/conversations/:id/action` (claim|transfer|close|reopen)
+- `GET|POST /api/conversations/:id/notes` (внутренние заметки)
 Realtime: Socket.IO на :3001 (`npm run realtime`), события §23 через Redis pub/sub.
 Локальный mock Wazzup для e2e отправки: `node --import tsx src/scripts/mock-wazzup.ts` (:4000),
 затем запустить worker с `WAZZUP_API_BASE_URL=http://localhost:4000`.

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthContext } from "@/lib/auth/context";
+import { getAuthContext, unauthorized, forbidden, canWrite } from "@/lib/auth/context";
 import { createOutboundMessage } from "@/lib/outbound/send-message";
 
 export const runtime = "nodejs";
@@ -20,7 +20,10 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const { organizationId, userId } = await getAuthContext();
+  const ctx = getAuthContext(req);
+  if (!ctx) return unauthorized();
+  if (!canWrite(ctx)) return forbidden();
+  const { organizationId, userId } = ctx;
   const { id } = await params;
 
   const parsed = BodySchema.safeParse(await req.json().catch(() => null));

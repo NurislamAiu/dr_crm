@@ -203,7 +203,7 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 | 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread | ✅ готово (analyze 0, unit-тесты; push/медиа — позже) |
 | 5 | POST /v3/message, crmMessageId, статусы, retry | ✅ готово (проверено e2e с mock Wazzup) |
 | 6 | медиа (S3): входящие download→MinIO, отправка вложений, просмотр | ✅ готово (e2e); voice-плеер со скоростями — follow-up |
-| 7 | менеджеры, распределение, RBAC, внутренние заметки | ⏳ |
+| 7 | JWT-логин, RBAC, захват/передача/закрытие, заметки, «печатает» | ✅ готово (e2e) |
 | 8 | contacts/users sync, мониторинг (админка), тесты, hardening | ⏳ |
 
 ### Проверено на Этапе 2 (live, Docker)
@@ -257,6 +257,17 @@ webhook statuses → sent/delivered/read/failed + MessageStatusHistory
 (2 crmMessageId, §14). Flutter: изображения inline + fullscreen, документы/аудио/
 видео — «Открыть» (signed URL). Отправка вложений из приложения (file picker) и
 voice-плеер со скоростями 1x/1.5x/2x — follow-up (backend готов).
+
+### Проверено на Этапе 7 (live)
+JWT-логин (`POST /api/auth/login`, scrypt-пароли, HS256-токен) заменил dev-заголовок
+`x-user-id`; все API требуют `Authorization: Bearer` (401 без токена, 403 при
+нехватке прав — RBAC admin/manager/viewer). Захват диалога атомарен: две
+параллельные попытки разных менеджеров → один 200, другой **409**, ответственный
+не перезаписан (§19). Передача (админ/ответственный), закрытие/переоткрытие,
+внутренние заметки (`InternalNote` — отдельная таблица, send-путь её не читает,
+в Wazzup не уходит). Realtime handshake верифицирует JWT; событие `user.typing`.
+Доступ к чужому диалогу → 404 (org-scoped, §24/#26). Flutter: экран логина, Bearer,
+меню захват/закрыть/переоткрыть, лист заметок, выход.
 
 ### Realtime (§23)
 Worker/API публикуют события в Redis pub/sub (`realtime:events`). Отдельный

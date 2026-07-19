@@ -12,11 +12,46 @@ class ApiClient {
 
   Map<String, String> get _headers => {
         'content-type': 'application/json',
-        'x-org-id': _config.organizationId,
-        if (_config.userId.isNotEmpty) 'x-user-id': _config.userId,
+        if (_config.token != null) 'authorization': 'Bearer ${_config.token}',
       };
 
   Uri _uri(String path) => Uri.parse('${_config.apiBaseUrl}$path');
+
+  /// Логин: возвращает данные сессии (токен сохраняется вызывающим).
+  Future<Map<String, dynamic>> login(String email, String password) async {
+    final res = await http.post(
+      _uri('/api/auth/login'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'email': email, 'password': password}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<void> conversationAction(String conversationId, String action, {String? toUserId}) async {
+    final res = await http.post(
+      _uri('/api/conversations/$conversationId/action'),
+      headers: _headers,
+      body: jsonEncode({'action': action, 'toUserId': ?toUserId}),
+    );
+    _ensureOk(res);
+  }
+
+  Future<List<Map<String, dynamic>>> getNotes(String conversationId) async {
+    final res = await http.get(_uri('/api/conversations/$conversationId/notes'), headers: _headers);
+    _ensureOk(res);
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return ((data['notes'] as List<dynamic>?) ?? []).cast<Map<String, dynamic>>();
+  }
+
+  Future<void> addNote(String conversationId, String text) async {
+    final res = await http.post(
+      _uri('/api/conversations/$conversationId/notes'),
+      headers: _headers,
+      body: jsonEncode({'text': text}),
+    );
+    _ensureOk(res);
+  }
 
   Future<List<Conversation>> getConversations({String? status}) async {
     final q = status != null ? '?status=$status' : '';
@@ -84,10 +119,7 @@ class ApiClient {
       'POST',
       _uri('/api/conversations/$conversationId/messages/send-media'),
     );
-    req.headers.addAll({
-      'x-org-id': _config.organizationId,
-      if (_config.userId.isNotEmpty) 'x-user-id': _config.userId,
-    });
+    if (_config.token != null) req.headers['authorization'] = 'Bearer ${_config.token}';
     req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
     if (caption != null && caption.isNotEmpty) req.fields['caption'] = caption;
     final streamed = await req.send();

@@ -3,10 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 
-/// Настройки подключения к backend (DEV). Этап 7 заменит userId на JWT-логин.
+/// Настройки: адреса backend и выход из сессии.
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key, this.firstRun = false});
-  final bool firstRun;
+  const SettingsScreen({super.key});
 
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
@@ -15,8 +14,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _api;
   late final TextEditingController _rt;
-  late final TextEditingController _org;
-  late final TextEditingController _user;
 
   @override
   void initState() {
@@ -24,62 +21,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final c = ref.read(appConfigProvider);
     _api = TextEditingController(text: c.apiBaseUrl);
     _rt = TextEditingController(text: c.realtimeUrl);
-    _org = TextEditingController(text: c.organizationId);
-    _user = TextEditingController(text: c.userId);
   }
 
   @override
   void dispose() {
     _api.dispose();
     _rt.dispose();
-    _org.dispose();
-    _user.dispose();
     super.dispose();
-  }
-
-  Future<void> _save() async {
-    await ref.read(appConfigProvider).save(
-          apiBaseUrl: _api.text,
-          realtimeUrl: _rt.text,
-          organizationId: _org.text,
-          userId: _user.text,
-        );
-    if (mounted && !widget.firstRun) Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
+    final config = ref.read(appConfigProvider);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.firstRun ? 'Подключение к CRM' : 'Настройки')),
+      appBar: AppBar(title: const Text('Настройки')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (widget.firstRun)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 12),
-              child: Text('Укажите адрес backend и id менеджера (DEV-режим).'),
-            ),
-          _field(_api, 'API base URL', 'http://localhost:3000'),
-          _field(_rt, 'Realtime URL', 'http://localhost:3001'),
-          _field(_org, 'Organization ID', 'default'),
-          _field(_user, 'Manager (user) ID', 'UUID менеджера'),
-          const SizedBox(height: 20),
-          FilledButton(onPressed: _save, child: const Text('Сохранить')),
+          Text('Менеджер: ${config.userName ?? ''} (${config.role ?? ''})'),
+          const SizedBox(height: 16),
+          _field(_api, 'API base URL'),
+          _field(_rt, 'Realtime URL'),
           const SizedBox(height: 8),
-          const Text(
-            'Android-эмулятор: host доступен как 10.0.2.2 вместо localhost.',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+          FilledButton(
+            onPressed: () async {
+              await config.setEndpoints(_api.text, _rt.text);
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('Сохранить'),
+          ),
+          const Divider(height: 32),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.logout),
+            label: const Text('Выйти'),
+            onPressed: () async {
+              await config.logout();
+              if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+            },
           ),
         ],
       ),
     );
   }
 
-  Widget _field(TextEditingController c, String label, String hint) => Padding(
+  Widget _field(TextEditingController c, String label) => Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: TextField(
           controller: c,
-          decoration: InputDecoration(labelText: label, hintText: hint, border: const OutlineInputBorder()),
+          decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
         ),
       );
 }

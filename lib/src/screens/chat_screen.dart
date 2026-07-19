@@ -47,6 +47,82 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  Future<void> _onAction(String action) async {
+    try {
+      await ref.read(apiClientProvider).conversationAction(_convId, action);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Готово: $action')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+      }
+    }
+  }
+
+  Future<void> _openNotes() async {
+    final api = ref.read(apiClientProvider);
+    final noteController = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Внутренние заметки (не видны клиенту)',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: api.getNotes(_convId),
+                  builder: (context, snap) {
+                    final notes = snap.data ?? [];
+                    if (notes.isEmpty) return const Text('Заметок пока нет');
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final n in notes)
+                          ListTile(
+                            dense: true,
+                            title: Text(n['text'] as String? ?? ''),
+                            subtitle: Text((n['author'] as Map?)?['name'] as String? ?? ''),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: noteController,
+                      decoration: const InputDecoration(hintText: 'Новая заметка…', border: OutlineInputBorder()),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () async {
+                      final text = noteController.text.trim();
+                      if (text.isEmpty) return;
+                      await api.addNote(_convId, text);
+                      if (context.mounted) Navigator.of(context).pop();
+                    },
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    noteController.dispose();
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -71,6 +147,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               Text(widget.conversation.contact.phone!, style: const TextStyle(fontSize: 12)),
           ],
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.sticky_note_2_outlined),
+            tooltip: 'Внутренние заметки',
+            onPressed: _openNotes,
+          ),
+          PopupMenuButton<String>(
+            onSelected: _onAction,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'claim', child: Text('Взять диалог')),
+              PopupMenuItem(value: 'close', child: Text('Закрыть')),
+              PopupMenuItem(value: 'reopen', child: Text('Переоткрыть')),
+            ],
+          ),
+        ],
       ),
       body: SafeArea(
         child: Column(

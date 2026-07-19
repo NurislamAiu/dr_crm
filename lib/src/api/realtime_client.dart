@@ -41,7 +41,7 @@ class RealtimeClient {
       _config.realtimeUrl,
       io.OptionBuilder()
           .setTransports(['websocket'])
-          .setAuth({'organizationId': _config.organizationId, 'userId': _config.userId})
+          .setAuth({'token': _config.token})
           .enableReconnection()
           .build(),
     );

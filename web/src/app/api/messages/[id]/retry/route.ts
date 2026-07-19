@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthContext } from "@/lib/auth/context";
+import { getAuthContext, unauthorized, forbidden, canWrite } from "@/lib/auth/context";
 import { retryOutboundMessage } from "@/lib/outbound/send-message";
 
 export const runtime = "nodejs";
@@ -10,10 +10,13 @@ export const dynamic = "force-dynamic";
  * Переиспользует тот же crmMessageId, нового текста/дубля не создаёт.
  */
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const { organizationId } = await getAuthContext();
+  const ctx = getAuthContext(req);
+  if (!ctx) return unauthorized();
+  if (!canWrite(ctx)) return forbidden();
+  const { organizationId } = ctx;
   const { id } = await params;
 
   const result = await retryOutboundMessage(organizationId, id);

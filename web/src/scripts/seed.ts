@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/db";
+import { hashPassword } from "@/lib/auth/password";
 
 /**
- * Seed: организация по умолчанию + пара менеджеров.
+ * Seed: организация по умолчанию + пара менеджеров с паролями.
  * organizationId="default" совпадает с DEFAULT_ORG_ID вебхука.
+ * DEV-пароль обоих: "password".
  */
 async function main(): Promise<void> {
   const org = await prisma.organization.upsert({
@@ -11,15 +13,16 @@ async function main(): Promise<void> {
     update: {},
   });
 
+  const passwordHash = hashPassword("password");
   await prisma.user.upsert({
     where: { organizationId_email: { organizationId: org.id, email: "manager@example.com" } },
-    create: { organizationId: org.id, email: "manager@example.com", name: "Менеджер Алия", role: "manager" },
-    update: {},
+    create: { organizationId: org.id, email: "manager@example.com", name: "Менеджер Алия", role: "manager", passwordHash },
+    update: { passwordHash },
   });
   await prisma.user.upsert({
     where: { organizationId_email: { organizationId: org.id, email: "admin@example.com" } },
-    create: { organizationId: org.id, email: "admin@example.com", name: "Админ", role: "admin" },
-    update: {},
+    create: { organizationId: org.id, email: "admin@example.com", name: "Админ", role: "admin", passwordHash },
+    update: { passwordHash },
   });
 
   const count = await prisma.user.count({ where: { organizationId: org.id } });

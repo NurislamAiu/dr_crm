@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getAuthContext } from "@/lib/auth/context";
+import { getAuthContext, unauthorized } from "@/lib/auth/context";
 import { signedGetUrl } from "@/lib/storage/s3";
 
 export const runtime = "nodejs";
@@ -12,10 +12,12 @@ export const dynamic = "force-dynamic";
  * вложение принадлежит организации запрашивающего.
  */
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const { organizationId } = await getAuthContext();
+  const ctx = getAuthContext(req);
+  if (!ctx) return unauthorized();
+  const { organizationId } = ctx;
   const { id } = await params;
 
   const att = await prisma.messageAttachment.findFirst({

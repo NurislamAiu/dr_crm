@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'src/config/app_config.dart';
 import 'src/state/providers.dart';
 import 'src/screens/conversations_screen.dart';
-import 'src/screens/settings_screen.dart';
+import 'src/screens/login_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,7 +34,7 @@ class CrmApp extends StatelessWidget {
   }
 }
 
-/// Гейт: если менеджер (userId) не настроен — показываем настройки.
+/// Гейт: без JWT-сессии — экран входа, иначе список диалогов.
 class _Root extends ConsumerWidget {
   const _Root();
 
@@ -44,8 +44,8 @@ class _Root extends ConsumerWidget {
     return AnimatedBuilder(
       animation: config,
       builder: (context, _) {
-        if (!config.isConfigured) {
-          return const SettingsScreen(firstRun: true);
+        if (!config.isAuthenticated) {
+          return const LoginScreen();
         }
         return const ConversationsScreen();
       },

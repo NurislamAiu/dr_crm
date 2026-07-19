@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getAuthContext } from "@/lib/auth/context";
+import { getAuthContext, unauthorized } from "@/lib/auth/context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +10,9 @@ export const dynamic = "force-dynamic";
  * Возвращает контакт, последнее сообщение, unread, ответственного (§18).
  */
 export async function GET(req: Request): Promise<Response> {
-  const { organizationId } = await getAuthContext();
+  const ctx = getAuthContext(req);
+  if (!ctx) return unauthorized();
+  const { organizationId } = ctx;
   const url = new URL(req.url);
   const status = url.searchParams.get("status"); // open|pending|closed
   const take = Math.min(Number(url.searchParams.get("limit") ?? 30), 100);

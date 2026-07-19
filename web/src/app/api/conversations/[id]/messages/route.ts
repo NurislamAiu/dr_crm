@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getAuthContext } from "@/lib/auth/context";
+import { getAuthContext, unauthorized } from "@/lib/auth/context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,9 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const { organizationId } = await getAuthContext();
+  const ctx = getAuthContext(req);
+  if (!ctx) return unauthorized();
+  const { organizationId } = ctx;
   const { id } = await params;
 
   const conversation = await prisma.conversation.findFirst({
