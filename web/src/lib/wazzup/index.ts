@@ -1,13 +1,13 @@
-export { WazzupApiClient, type WazzupClientConfig } from "./client.js";
-export { WazzupApiError, WazzupTimeoutError } from "./errors.js";
-export { getWazzupClient, __setWazzupClient } from "./factory.js";
+export { WazzupApiClient, type WazzupClientConfig } from "./client";
+export { WazzupApiError, WazzupTimeoutError } from "./errors";
+export { getWazzupClient, __setWazzupClient } from "./factory";
 export {
   evaluateChannelState,
   findWhatsappChannel,
   type ChannelStatus,
-} from "./channel-state.js";
+} from "./channel-state";
 export {
   collectWazzupDiagnostics,
   type WazzupDiagnostics,
-} from "./diagnostics.js";
-export * from "./schemas.js";
+} from "./diagnostics";
+export * from "./schemas";

@@ -1,63 +1,73 @@
-# crm-web — интерфейс чатов CRM поверх Wazzup User API v3 (WhatsApp QR)
+# crm-web — backend + тонкая админка (Wazzup User API v3, WhatsApp QR)
 
-Backend + frontend собственной CRM для приёма/отправки WhatsApp-сообщений через
-Wazzup (транспорт `whatsapp`, QR-подключение). Wazzup используется только как
-транспорт. Архитектура и сверка с официальной документацией — в
-[`../architecture.md`](../architecture.md).
+Сервер собственной CRM: приём/отправка WhatsApp через Wazzup (транспорт
+`whatsapp`, QR), REST + WebSocket для **мобильного приложения менеджеров на
+Flutter**, и тонкая веб-админка (настройка webhook, диагностика).
+Архитектура и сверка с документацией — в [`../architecture.md`](../architecture.md).
 
-> ⚠️ Расхождения ТЗ с официальной документацией Wazzup зафиксированы в
-> `architecture.md §1` (главное: состояние QR называется `qr`, а не `qridle`;
-> окно дедупа `crmMessageId` — 60 сек; в статусах поле `timestamp`).
+> Клиент менеджеров — **Flutter-приложение** (репозиторий в корне). Этот пакет —
+> backend для него + админка. Веб-UI чатов не строится.
 
 ## Статус
 
 | Этап | Содержание | Статус |
 |---|---|---|
-| 1 | architecture.md, WazzupApiClient, env-валидация, GET channels, диагностика | ✅ готово |
-| 2 | webhook endpoint, очередь, нормализатор, дедуп | ⏳ |
-| 3–8 | входящие/realtime, UI, отправка, медиа, RBAC, sync/мониторинг/тесты | ⏳ |
+| 1 | WazzupApiClient, env, GET channels, диагностика | ✅ |
+| 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ (проверено e2e на Docker) |
+| 3 | Contact/Conversation/Message, входящие, realtime | ⏳ |
+| 4 | Flutter-приложение (чаты/composer/статусы/push) | ⏳ |
+| 5–8 | отправка, медиа, RBAC, sync/мониторинг/тесты | ⏳ |
 
-## Что уже есть (Этап 1)
+## Структура (Этапы 1–2)
 
 ```
-web/src/lib/
-├── env.ts                      # Zod-валидация окружения, запрет NEXT_PUBLIC ключа
-├── logger.ts                   # структурный лог + маскирование ключа/телефонов
-└── wazzup/
-    ├── client.ts               # WazzupApiClient — единая точка вызовов Wazzup
-    ├── schemas.ts              # Zod-схемы v3 (выверены по документации)
-    ├── errors.ts               # WazzupApiError / WazzupTimeoutError + safe-текст
-    ├── channel-state.ts        # state канала → поведение UI (canSend, сообщения)
-    ├── diagnostics.ts          # сбор диагностики (ключ/канал/webhook)
-    ├── factory.ts              # getWazzupClient() из env (singleton)
-    └── __tests__/              # mock Wazzup server + юнит-тесты (реальные сообщения не шлются)
+web/
+├── docker-compose.yml          # Postgres + Redis + MinIO (dev-инфра)
+├── prisma/schema.prisma        # WazzupWebhookEvent, InboundMessageReceipt
+├── src/
+│   ├── app/
+│   │   ├── api/webhooks/wazzup/route.ts   # приём webhook: raw+sha256, дедуп, enqueue, 200
+│   │   └── api/health/route.ts            # health (Postgres+Redis)
+│   ├── lib/
+│   │   ├── env.ts, logger.ts              # env-валидация, маскирование
+│   │   ├── db.ts, redis.ts                # Prisma / ioredis синглтоны
+│   │   ├── queue/webhook-queue.ts         # BullMQ очередь (jobId=eventId)
+│   │   └── wazzup/                         # client, schemas, errors, normalizer, webhook-auth, ...
+│   └── worker/                             # BullMQ worker: нормализация + дедуп + обработка
 ```
 
-`WazzupApiClient` реализует методы §4 ТЗ: `getChannels, sendTextMessage,
-sendMediaMessage, replyToMessage, editMessage, deleteMessage, configureWebhooks,
-getWebhookSettings, syncUsers, syncContacts, testConnection` (+ `getUsers`).
-Каждый запрос: `Authorization: Bearer`, timeout, `Content-Type: application/json`,
-Zod-валидация ответа, маскирование ключа, `requestId` при ошибках, обработка
-400/401/403/429/500, retry только для безопасных методов, без авто-ретрая отправки.
-
-## Команды
+## Запуск (dev)
 
 ```bash
+cp .env.example .env            # заполнить при необходимости (дефолты подходят для локали)
+docker compose up -d            # Postgres, Redis, MinIO
 npm install
-npm run typecheck   # tsc --noEmit (strict)
-npm test            # tsc + node --test dist  (20 тестов)
-npm run build       # компиляция в dist/
+npm run db:migrate              # применить миграции Prisma
+npm run dev                     # Next.js (API + админка) на :3000
+npm run worker                  # в отдельном терминале — BullMQ worker
 ```
 
-## Окружение
+Проверки:
+```bash
+npm run typecheck               # tsc --noEmit (strict) — 0 ошибок
+npm test                        # vitest — 33 теста
+curl http://localhost:3000/api/health
+```
 
-Скопировать `.env.example` → `.env` и заполнить. `WAZZUP_API_KEY` — секрет,
-только backend. **Запрещено** создавать `NEXT_PUBLIC_WAZZUP_API_KEY` (env.ts
-падает при обнаружении).
+### Пример проверки webhook
 
-## Дальше (Этап 2)
+```bash
+SEC=dev-webhook-secret
+# тест-пинг
+curl -X POST "http://localhost:3000/api/webhooks/wazzup?secret=$SEC" -d '{"test":true}'
+# входящее сообщение (Bearer-вариант секрета)
+curl -X POST http://localhost:3000/api/webhooks/wazzup \
+  -H "authorization: Bearer $SEC" -H 'content-type: application/json' \
+  -d '{"messages":[{"messageId":"m1","channelId":"c1","chatType":"whatsapp","chatId":"77011234567","dateTime":"2026-07-19T10:00:00Z","type":"text","text":"hi","isEcho":false}]}'
+```
 
-Добавляется Next.js App Router (route handlers), Prisma, Redis/BullMQ, Socket.IO.
-На этом этапе появятся HTTP-маршруты, оборачивающие сервисы Этапа 1:
-`GET /api/admin/wazzup/diagnostics`, `POST /api/webhooks/wazzup`, кнопки
-«Настроить webhook» / «Проверить webhook».
+## Дальше (Этап 3)
+
+Полные Prisma-модели (Contact/Conversation/Message/RBAC/…), создание клиента и
+диалога из входящих (без дублей), unreadCount, WebSocket-события — сервер для
+Flutter-приложения.

@@ -1,7 +1,7 @@
-import { getEnv } from "../env.js";
-import type { WazzupApiClient } from "./client.js";
-import { evaluateChannelState, findWhatsappChannel } from "./channel-state.js";
-import type { Channel } from "./schemas.js";
+import { getEnv } from "../env";
+import type { WazzupApiClient } from "./client";
+import { evaluateChannelState, findWhatsappChannel } from "./channel-state";
+import type { Channel } from "./schemas";
 
 /**
  * Сервис диагностики Wazzup (ТЗ §25). На Этапе 1 покрывает то, что зависит

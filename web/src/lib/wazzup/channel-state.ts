@@ -1,4 +1,4 @@
-import type { Channel } from "./schemas.js";
+import type { Channel } from "./schemas";
 
 /**
  * Отображение состояния канала в поведение CRM (ТЗ §5, architecture.md §5).

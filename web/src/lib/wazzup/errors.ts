@@ -1,4 +1,4 @@
-import type { WazzupErrorBody } from "./schemas.js";
+import type { WazzupErrorBody } from "./schemas";
 
 /**
  * Ошибка вызова Wazzup API. Хранит HTTP-статус, requestId и провайдерский код,

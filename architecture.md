@@ -93,20 +93,38 @@
 
 ## 3. Технологический стек
 
+> **Решение по клиенту (2026-07-19):** интерфейс менеджеров — **мобильное
+> приложение на Flutter** (существующий репозиторий, iOS+Android). Веб на
+> Next.js остаётся как **backend (API/WebSocket/worker) + тонкая веб-админка**
+> для админ-задач (настройка/проверка webhook, страница диагностики §25).
+> Полноценный веб-UI чатов из §18 не строим — его роль выполняет Flutter-приложение.
+
 | Слой | Технология |
 |---|---|
-| Frontend | Next.js App Router, React, TS strict, Tailwind, shadcn/ui, TanStack Query, RHF, Zod |
-| Backend | Next.js Route Handlers (unified), TS strict, Zod |
+| **Мобильный клиент менеджеров** | **Flutter (Dart), iOS + Android** — чаты, composer, статусы, realtime, push |
+| Backend (сервер для приложения) | Next.js Route Handlers, TS strict, Zod |
+| Веб-админка (тонкая) | Next.js App Router, React, TS — только настройки/диагностика Wazzup |
 | Данные | PostgreSQL + Prisma ORM |
 | Очереди/кэш/lock | Redis + BullMQ |
-| Realtime | Socket.IO (отдельный процесс/worker) |
-| Auth | Auth.js (JWT-сессии) + RBAC |
+| Realtime | Socket.IO / WebSocket (приложение и админка подписываются) |
+| Auth | JWT (Bearer для мобильного приложения) + RBAC; secure cookies для админки |
 | Файлы | S3-совместимое (MinIO в dev) |
 | Инфра | Docker Compose, health checks, структурные логи, бэкапы БД |
 
-**Выбор:** Next.js Route Handlers как backend (а не NestJS) — единый рантайм с
-frontend, проще деплой одной CRM одной компании. Тяжёлую фоновую работу выносим
-в отдельные worker-процессы (BullMQ), realtime — в Socket.IO-процесс.
+**Выбор:** Next.js Route Handlers как backend (а не NestJS) — единый рантайм для
+API и тонкой админки, проще деплой одной CRM одной компании. Тяжёлую фоновую
+работу выносим в отдельный worker-процесс (BullMQ). Flutter-приложение общается
+с backend по REST + WebSocket; аутентификация — JWT Bearer (не cookie-сессии,
+т.к. клиент мобильный).
+
+### 3.1 Топология клиентов
+```
+Flutter app (менеджер, iOS/Android) ──REST/JWT──▶ Next.js API ──▶ Postgres/Redis/S3
+        ▲                                  │
+        └──────── WebSocket (события) ──────┘
+Веб-админка (Next.js, тот же backend) ── настройка webhook, диагностика §25
+Worker (BullMQ) ── обработка webhook, скачивание медиа, sync
+```
 
 ---
 
@@ -179,11 +197,18 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 
 | Этап | Содержание | Статус |
 |---|---|---|
-| 1 | architecture.md, WazzupApiClient, env-валидация, GET channels, диагностика | 🟡 в работе |
-| 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ⏳ |
-| 3 | Contact/Conversation/Message, входящие, realtime | ⏳ |
-| 4 | desktop/mobile chat, composer, unread | ⏳ |
+| 1 | architecture.md, WazzupApiClient, env-валидация, GET channels, диагностика | ✅ готово |
+| 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ готово (проверено e2e на Docker) |
+| 3 | Contact/Conversation/Message, входящие, realtime (WebSocket) | ⏳ |
+| 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread, push | ⏳ |
 | 5 | POST /v3/message, crmMessageId, статусы, retry | ⏳ |
-| 6 | медиа, voice player, documents, image preview | ⏳ |
+| 6 | медиа (S3), voice player, documents, image preview | ⏳ |
 | 7 | менеджеры, распределение, RBAC, внутренние заметки | ⏳ |
-| 8 | contacts/users sync, мониторинг, тесты, hardening | ⏳ |
+| 8 | contacts/users sync, мониторинг (админка), тесты, hardening | ⏳ |
+
+### Проверено на Этапе 2 (live, Docker)
+POST `{test:true}`→200; без секрета→401; входящий текст→сохранён+обработан;
+повтор webhook→`duplicate:true` (sha256-дедуп, без дубля события); входящее
+сообщение дедуплицировано по `provider+externalMessageId`; `missing_call`→
+подсказка; `messages`+`statuses` в одном webhook обработаны независимо;
+`chatId` нормализован; телефоны в логах маскируются. 33 юнит-теста зелёные.

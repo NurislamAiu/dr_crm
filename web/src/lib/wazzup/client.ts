@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { logger, maskSecret } from "../logger.js";
-import { WazzupApiError, WazzupTimeoutError } from "./errors.js";
+import { logger, maskSecret } from "../logger";
+import { WazzupApiError, WazzupTimeoutError } from "./errors";
 import {
   ChannelsResponseSchema,
   SendMessageResponseSchema,
@@ -13,7 +13,7 @@ import {
   type WebhookSubscriptions,
   type WazzupUser,
   type WazzupContact,
-} from "./schemas.js";
+} from "./schemas";
 
 /**
  * Серверный клиент Wazzup User API v3. ВСЕ вызовы Wazzup проходят через него.

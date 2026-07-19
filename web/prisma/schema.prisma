@@ -1,0 +1,73 @@
+// Prisma schema — Этап 2.
+// Полный набор моделей (Contact/Conversation/Message/RBAC/...) добавляется на
+// Этапе 3+. Здесь — то, что нужно для приёма и дедупликации webhook.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WebhookEventStatus {
+  received
+  processing
+  processed
+  failed
+}
+
+/// Сырое хранилище входящих webhook (ТЗ §6 п.7). Никогда не теряем payload.
+model WazzupWebhookEvent {
+  id                 String             @id @default(uuid())
+  /// Источник/идентификатор организации (single-tenant по умолчанию).
+  organizationId     String             @default("default")
+  /// SHA-256 сырого тела — идемпотентность приёма (дедуп одинаковых webhook).
+  payloadSha256      String
+  /// Сырой payload целиком (не теряем неизвестные поля).
+  rawPayload         Json
+  /// Был ли это тестовый пинг { test: true }.
+  isTest             Boolean            @default(false)
+  messageCount       Int                @default(0)
+  statusCount        Int                @default(0)
+  channelUpdateCount Int                @default(0)
+  status             WebhookEventStatus @default(received)
+  attempts           Int                @default(0)
+  error              String?
+  receivedAt         DateTime           @default(now())
+  processedAt        DateTime?
+
+  receipts InboundMessageReceipt[]
+
+  @@unique([organizationId, payloadSha256])
+  @@index([status])
+  @@index([receivedAt])
+}
+
+/// Дедуп входящих сообщений на уровне провайдерского messageId (ТЗ §11).
+/// Предшественник модели Message (Этап 3), которая будет ссылаться на эти данные.
+model InboundMessageReceipt {
+  id                String   @id @default(uuid())
+  organizationId    String   @default("default")
+  provider          String   @default("wazzup")
+  /// Wazzup messageId.
+  externalMessageId String
+  channelId         String
+  chatType          String
+  chatId            String
+  /// inbound | outbound (по isEcho).
+  direction         String
+  type              String
+  hasContent        Boolean  @default(false)
+  isEdited          Boolean  @default(false)
+  isDeleted         Boolean  @default(false)
+  providerDateTime  DateTime?
+  webhookEventId    String?
+  webhookEvent      WazzupWebhookEvent? @relation(fields: [webhookEventId], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([provider, externalMessageId])
+  @@index([organizationId, channelId, chatId])
+}

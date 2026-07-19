@@ -1,10 +1,10 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { WazzupApiClient } from "../client.js";
-import { WazzupApiError, WazzupTimeoutError } from "../errors.js";
-import { evaluateChannelState, findWhatsappChannel } from "../channel-state.js";
-import type { Channel } from "../schemas.js";
-import { MockWazzupServer } from "./mock-server.js";
+import { WazzupApiClient } from "../client";
+import { WazzupApiError, WazzupTimeoutError } from "../errors";
+import { evaluateChannelState, findWhatsappChannel } from "../channel-state";
+import type { Channel } from "../schemas";
+import { MockWazzupServer } from "./mock-server";
 
 function makeClient(server: MockWazzupServer, overrides = {}): WazzupApiClient {
   return new WazzupApiClient({

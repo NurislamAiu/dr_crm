@@ -1,5 +1,5 @@
-import { getEnv } from "../env.js";
-import { WazzupApiClient } from "./client.js";
+import { getEnv } from "../env";
+import { WazzupApiClient } from "./client";
 
 /**
  * Фабрика серверного клиента Wazzup из валидированного окружения.

@@ -1,7 +1,7 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { getEnv, resetEnvCache, EnvValidationError } from "../env.js";
-import { maskPhone, maskSecret, redact } from "../logger.js";
+import { getEnv, resetEnvCache, EnvValidationError } from "../env";
+import { maskPhone, maskSecret, redact } from "../logger";
 
 const baseEnv = {
   WAZZUP_API_KEY: "abcd1234",
