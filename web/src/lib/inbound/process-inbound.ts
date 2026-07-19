@@ -86,11 +86,12 @@ export async function processInboundMessage(
     });
     const contactCreated = !contactBefore;
 
-    // --- 2. Открытый диалог (иначе создать §11 п.6-7) ---
-    let conversation = await tx.conversation.findFirst({
-      where: { organizationId: ctx.organizationId, contactId: contact.id, status: { not: "closed" } },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, unreadCount: true, assignedUserId: true },
+    // --- 2. Диалог: ОДИН на контакт (уникальный индекс org+contactId).
+    //         Если есть — берём его (при гонке проигравшая транзакция упадёт и
+    //         повторится джобой BullMQ — дубль не создастся). §11 п.6-7. ---
+    let conversation = await tx.conversation.findUnique({
+      where: { organizationId_contactId: { organizationId: ctx.organizationId, contactId: contact.id } },
+      select: { id: true, unreadCount: true, assignedUserId: true, status: true },
     });
     let conversationCreated = false;
     if (!conversation) {
@@ -102,7 +103,7 @@ export async function processInboundMessage(
           chatType: m.chatType,
           status: "open",
         },
-        select: { id: true, unreadCount: true, assignedUserId: true },
+        select: { id: true, unreadCount: true, assignedUserId: true, status: true },
       });
       conversationCreated = true;
     }
@@ -214,6 +215,8 @@ export async function processInboundMessage(
         lastMessagePreview: preview,
         ...(isInbound ? { unreadCount: { increment: 1 } } : {}),
         ...(assignedUserId && !conversation.assignedUserId ? { assignedUserId } : {}),
+        // Входящее в закрытый диалог — переоткрываем (§11).
+        ...(conversation.status === "closed" ? { status: "open" as const } : {}),
       },
     });
 

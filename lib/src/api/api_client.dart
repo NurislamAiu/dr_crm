@@ -28,6 +28,12 @@ class ApiClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Отметить диалог прочитанным (сброс непрочитанных).
+  Future<void> markRead(String conversationId) async {
+    final res = await http.post(_uri('/api/conversations/$conversationId/read'), headers: _headers);
+    _ensureOk(res);
+  }
+
   Future<void> conversationAction(String conversationId, String action, {String? toUserId}) async {
     final res = await http.post(
       _uri('/api/conversations/$conversationId/action'),

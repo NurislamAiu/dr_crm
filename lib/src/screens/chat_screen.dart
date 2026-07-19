@@ -24,6 +24,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String get _convId => widget.conversation.id;
 
   @override
+  void initState() {
+    super.initState();
+    // Открыли чат → отмечаем прочитанным; список обновится по realtime.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(apiClientProvider).markRead(_convId).then((_) {
+        if (mounted) ref.read(conversationsProvider.notifier).refresh();
+      }).catchError((_) {});
+    });
+  }
+
+  @override
   void dispose() {
     _input.dispose();
     _scroll.dispose();

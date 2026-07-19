@@ -154,9 +154,10 @@ model Conversation {
   assignments ConversationAssignment[]
   notes       InternalNote[]
 
+  // Один диалог на контакт — исключает дубли чатов при гонке входящих.
+  @@unique([organizationId, contactId])
   @@index([organizationId, status])
   @@index([organizationId, assignedUserId])
-  @@index([contactId])
 }
 
 model ConversationAssignment {

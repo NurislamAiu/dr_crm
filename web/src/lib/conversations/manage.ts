@@ -104,6 +104,26 @@ export async function setConversationStatus(
   return { ok: true };
 }
 
+/** Отметить диалог прочитанным (сбросить счётчик непрочитанных). */
+export async function markConversationRead(
+  organizationId: string,
+  conversationId: string,
+): Promise<{ ok: boolean }> {
+  const res = await prisma.conversation.updateMany({
+    where: { id: conversationId, organizationId, unreadCount: { gt: 0 } },
+    data: { unreadCount: 0 },
+  });
+  if (res.count > 0) {
+    await publishRealtime({
+      event: "conversation.updated",
+      organizationId,
+      conversationId,
+      payload: { conversationId, unreadCount: 0 },
+    });
+  }
+  return { ok: true };
+}
+
 /** Внутренняя заметка — НИКОГДА не уходит в Wazzup (§19). */
 export async function addInternalNote(
   organizationId: string,
