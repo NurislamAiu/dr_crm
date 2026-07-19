@@ -218,21 +218,102 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: async.when(
                   loading: () => const Center(child: CircularProgressIndicator()),
                   error: (e, _) => Center(child: Text('Ошибка: $e')),
-                  data: (messages) => ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    itemCount: messages.length,
-                    itemBuilder: (context, i) => _Bubble(
-                      message: messages[i],
-                      onRetry: () => ref.read(messagesProvider(_convId).notifier).retry(_convId, messages[i].id),
-                    ),
-                  ),
+                  data: (messages) => messages.isEmpty
+                    ? const _EmptyChat()
+                    : ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        itemCount: messages.length,
+                        itemBuilder: (context, i) {
+                          final m = messages[i];
+                          final showDate = i == 0 || !_sameDay(messages[i - 1].sortTime, m.sortTime);
+                          final prevSameSide = i > 0 &&
+                              !showDate &&
+                              messages[i - 1].isOutbound == m.isOutbound;
+                          return Column(
+                            children: [
+                              if (showDate) _DateChip(date: m.sortTime),
+                              Padding(
+                                padding: EdgeInsets.only(top: prevSameSide ? 1 : 4),
+                                child: _Bubble(
+                                  message: m,
+                                  onRetry: () => ref.read(messagesProvider(_convId).notifier).retry(_convId, m.id),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
                 ),
               ),
               _Composer(controller: _input, sending: _sending, onSend: _send),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+
+String _dateLabel(DateTime d) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(d.year, d.month, d.day);
+  final diff = today.difference(day).inDays;
+  if (diff == 0) return 'Сегодня';
+  if (diff == 1) return 'Вчера';
+  const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  final year = d.year != now.year ? ' ${d.year}' : '';
+  return '${d.day} ${months[d.month - 1]}$year';
+}
+
+/// Разделитель дат в переписке.
+class _DateChip extends StatelessWidget {
+  const _DateChip({required this.date});
+  final DateTime date;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        _dateLabel(date),
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: context.semantic.textSecondary),
+      ),
+    );
+  }
+}
+
+/// Пустая переписка.
+class _EmptyChat extends StatelessWidget {
+  const _EmptyChat();
+
+  @override
+  Widget build(BuildContext context) {
+    final sem = context.semantic;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.1), shape: BoxShape.circle),
+            child: const Icon(Icons.forum_outlined, size: 40, color: AppColors.brand),
+          ),
+          const SizedBox(height: 16),
+          Text('Начните переписку', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: sem.textSecondary)),
+          const SizedBox(height: 4),
+          Text('Сообщения появятся здесь', style: TextStyle(fontSize: 13, color: sem.textSecondary.withValues(alpha: 0.7))),
+        ],
       ),
     );
   }
@@ -282,7 +363,7 @@ class _Bubble extends StatelessWidget {
 
     return Container(
       alignment: isOut ? Alignment.centerRight : Alignment.centerLeft,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Container(
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),

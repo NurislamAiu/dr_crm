@@ -49,20 +49,12 @@ LinearGradient avatarGradient(String seed) {
   return LinearGradient(colors: palettes[idx], begin: Alignment.topLeft, end: Alignment.bottomRight);
 }
 
-/// Глиф для аватара БЕЗ персональных данных — код страны по номеру.
-/// Код +7 общий у РФ и РК; различаем по цифре после семёрки:
-/// у Казахстана национальные коды начинаются с 7 (7xx), у России — нет.
+/// Глиф для аватара БЕЗ персональных данных — только KZ или RUS.
+/// Казахстан = +7 7xx (начинается с 77); все остальные номера — RUS.
 /// Фото пациента не используется по требованиям приватности.
 String avatarGlyph(String label) {
   final digits = label.replaceAll(RegExp(r'\D'), '');
-  if (digits.startsWith('7') && digits.length >= 2) {
-    return digits[1] == '7' ? 'KZ' : 'RUS';
-  }
-  // Прочие страны — код страны (1–3 цифры).
-  if (digits.isNotEmpty) {
-    return '+${digits.substring(0, digits.length >= 2 ? 2 : 1)}';
-  }
-  return '#';
+  return digits.startsWith('77') ? 'KZ' : 'RUS';
 }
 
 /// Фон экрана чата (мягкий градиент).
