@@ -82,3 +82,10 @@ export async function signedGetUrl(key: string, ttlSeconds = 300): Promise<strin
     { expiresIn: ttlSeconds },
   );
 }
+
+/** Считать объект целиком в байты (для проксирования через backend). */
+export async function getObjectBytes(key: string): Promise<Uint8Array> {
+  const res = await getS3().send(new GetObjectCommand({ Bucket: bucketName(), Key: key }));
+  if (!res.Body) throw new Error("Пустое тело объекта");
+  return res.Body.transformToByteArray();
+}

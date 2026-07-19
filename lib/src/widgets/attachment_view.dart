@@ -6,7 +6,8 @@ import '../models/models.dart';
 import '../state/providers.dart';
 
 /// Отображение вложения сообщения (§10, §18).
-/// Изображение — превью + полноэкранный просмотр; прочее — карточка «Открыть».
+/// Изображение грузится через backend-прокси (тот же хост, что API, с Bearer) —
+/// поэтому корректно показывается на устройстве/эмуляторе, а не только локально.
 class AttachmentView extends ConsumerStatefulWidget {
   const AttachmentView({super.key, required this.attachment});
   final Attachment attachment;
@@ -16,58 +17,87 @@ class AttachmentView extends ConsumerStatefulWidget {
 }
 
 class _AttachmentViewState extends ConsumerState<AttachmentView> {
-  Future<String>? _urlFuture;
+  int _reload = 0;
 
-  Future<String> _url() => _urlFuture ??= ref.read(apiClientProvider).attachmentUrl(widget.attachment.id);
+  String get _contentUrl {
+    final base = ref.read(appConfigProvider).apiBaseUrl;
+    return '$base/api/attachments/${widget.attachment.id}/content';
+  }
+
+  Map<String, String> get _headers {
+    final token = ref.read(appConfigProvider).token;
+    return token != null ? {'authorization': 'Bearer $token'} : {};
+  }
 
   @override
   Widget build(BuildContext context) {
     final a = widget.attachment;
     if (a.status != 'stored') {
-      return _statusChip(a.status == 'failed' ? 'Файл недоступен' : 'Загрузка файла…');
+      return _chip(
+        icon: a.status == 'failed' ? Icons.broken_image_outlined : Icons.downloading,
+        label: a.status == 'failed' ? 'Файл недоступен' : 'Загрузка файла…',
+      );
     }
     if (a.kind == 'image') return _imagePreview();
     return _fileCard();
   }
 
-  Widget _statusChip(String label) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+  Widget _chip({required IconData icon, required String label}) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.hourglass_empty, size: 16, color: Colors.grey),
+          Icon(icon, size: 18, color: Colors.grey),
           const SizedBox(width: 6),
           Text(label, style: const TextStyle(color: Colors.grey)),
         ]),
       );
 
   Widget _imagePreview() {
-    return FutureBuilder<String>(
-      future: _url(),
-      builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const SizedBox(width: 180, height: 120, child: Center(child: CircularProgressIndicator()));
-        }
-        if (snap.hasError || snap.data == null) {
-          return _retryable('Не удалось загрузить изображение');
-        }
-        final url = snap.data!;
-        return GestureDetector(
-          onTap: () => _openFullscreen(url),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Image.network(
-              url,
-              width: 220,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => _retryable('Ошибка изображения'),
-              loadingBuilder: (context, child, progress) => progress == null
-                  ? child
-                  : const SizedBox(width: 180, height: 120, child: Center(child: CircularProgressIndicator())),
-            ),
+    return GestureDetector(
+      onTap: _openFullscreen,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 240, maxHeight: 320, minWidth: 140, minHeight: 100),
+          child: Image.network(
+            _contentUrl,
+            key: ValueKey(_reload),
+            headers: _headers,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            loadingBuilder: (context, child, progress) => progress == null
+                ? child
+                : Container(
+                    width: 200,
+                    height: 150,
+                    color: Colors.black.withValues(alpha: 0.05),
+                    alignment: Alignment.center,
+                    child: const CircularProgressIndicator(strokeWidth: 2),
+                  ),
+            errorBuilder: (_, _, _) => _errorTile(),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
+
+  Widget _errorTile() => Container(
+        width: 200,
+        height: 130,
+        color: Colors.black.withValues(alpha: 0.05),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.image_not_supported_outlined, color: Colors.grey),
+            const SizedBox(height: 6),
+            TextButton.icon(
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Повторить'),
+              onPressed: () => setState(() => _reload++),
+            ),
+          ],
+        ),
+      );
 
   Widget _fileCard() {
     final a = widget.attachment;
@@ -83,10 +113,7 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(12),
-        ),
+        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(12)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: 42,
@@ -100,8 +127,7 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(_kindLabel(a.kind)),
-              Text('${a.mimeType ?? ''} $size'.trim(),
-                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              Text('${a.mimeType ?? ''} $size'.trim(), style: const TextStyle(fontSize: 11, color: Colors.grey)),
             ],
           ),
           const SizedBox(width: 8),
@@ -111,17 +137,11 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
     );
   }
 
-  Widget _retryable(String message) => Row(mainAxisSize: MainAxisSize.min, children: [
-        Text(message, style: const TextStyle(color: Colors.red, fontSize: 12)),
-        IconButton(
-          icon: const Icon(Icons.refresh, size: 16),
-          onPressed: () => setState(() => _urlFuture = null),
-        ),
-      ]);
-
+  /// Открытие документа/аудио/видео во внешнем приложении — по signed URL
+  /// (url_launcher не умеет добавлять заголовки).
   Future<void> _openExternally() async {
     try {
-      final url = await _url();
+      final url = await ref.read(apiClientProvider).attachmentUrl(widget.attachment.id);
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } catch (_) {
       if (mounted) {
@@ -130,12 +150,16 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
     }
   }
 
-  void _openFullscreen(String url) {
+  void _openFullscreen() {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => Scaffold(
         backgroundColor: Colors.black,
-        appBar: AppBar(backgroundColor: Colors.black),
-        body: Center(child: InteractiveViewer(child: Image.network(url))),
+        appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
+        body: Center(
+          child: InteractiveViewer(
+            child: Image.network(_contentUrl, headers: _headers),
+          ),
+        ),
       ),
     ));
   }
