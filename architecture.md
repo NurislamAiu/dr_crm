@@ -200,7 +200,7 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 | 1 | architecture.md, WazzupApiClient, env-валидация, GET channels, диагностика | ✅ готово |
 | 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ готово (проверено e2e на Docker) |
 | 3 | Contact/Conversation/Message, входящие, realtime (WebSocket) | ✅ готово (проверено e2e на Docker) |
-| 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread, push | ⏳ |
+| 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread | ✅ готово (analyze 0, unit-тесты; push/медиа — позже) |
 | 5 | POST /v3/message, crmMessageId, статусы, retry | ✅ готово (проверено e2e с mock Wazzup) |
 | 6 | медиа (S3), voice player, documents, image preview | ⏳ |
 | 7 | менеджеры, распределение, RBAC, внутренние заметки | ⏳ |

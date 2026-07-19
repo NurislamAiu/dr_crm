@@ -1,30 +1,55 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:crm/main.dart';
+import 'package:crm/src/models/models.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('Conversation.fromJson парсит поля и контакт', () {
+    final c = Conversation.fromJson({
+      'id': 'conv-1',
+      'status': 'open',
+      'unreadCount': 3,
+      'lastMessageAt': '2026-07-19T14:00:00.000Z',
+      'lastMessagePreview': 'Привет',
+      'channelId': 'chan-1',
+      'assignedUser': {'id': 'u1', 'name': 'Алия'},
+      'contact': {'id': 'ct1', 'name': 'Айгуль', 'phone': '77011234567', 'chatId': '77011234567'},
+    });
+    expect(c.id, 'conv-1');
+    expect(c.unreadCount, 3);
+    expect(c.contact.name, 'Айгуль');
+    expect(c.assignedUser?.name, 'Алия');
+    expect(c.lastMessageAt, isNotNull);
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  test('Message.fromJson: направление, редактирование, вложения', () {
+    final m = Message.fromJson({
+      'id': 'm1',
+      'direction': 'outbound',
+      'type': 'text',
+      'status': 'delivered',
+      'text': 'Ответ',
+      'isEdited': true,
+      'deletedAt': null,
+      'createdAt': '2026-07-19T14:01:00.000Z',
+      'attachments': [
+        {'id': 'a1', 'kind': 'image', 'mimeType': 'image/jpeg', 'status': 'stored'}
+      ],
+    });
+    expect(m.isOutbound, true);
+    expect(m.isDeleted, false);
+    expect(m.isEdited, true);
+    expect(m.attachments.single.kind, 'image');
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('Message.fromJson: удалённое сообщение', () {
+    final m = Message.fromJson({
+      'id': 'm2',
+      'direction': 'inbound',
+      'type': 'text',
+      'status': 'inbound',
+      'deletedAt': '2026-07-19T14:02:00.000Z',
+      'createdAt': '2026-07-19T14:01:00.000Z',
+    });
+    expect(m.isDeleted, true);
   });
 }
