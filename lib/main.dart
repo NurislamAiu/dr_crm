@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'src/config/app_config.dart';
 import 'src/state/providers.dart';
+import 'src/theme/app_theme.dart';
 import 'src/screens/conversations_screen.dart';
 import 'src/screens/login_screen.dart';
 
@@ -25,10 +26,9 @@ class CrmApp extends StatelessWidget {
     return MaterialApp(
       title: 'CRM — WhatsApp',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF25D366)),
-        useMaterial3: true,
-      ),
+      theme: buildAppTheme(Brightness.light),
+      darkTheme: buildAppTheme(Brightness.dark),
+      themeMode: ThemeMode.system,
       home: const _Root(),
     );
   }

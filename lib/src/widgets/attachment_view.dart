@@ -53,10 +53,10 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
         return GestureDetector(
           onTap: () => _openFullscreen(url),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(14),
             child: Image.network(
               url,
-              width: 200,
+              width: 220,
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => _retryable('Ошибка изображения'),
               loadingBuilder: (context, child, progress) => progress == null
@@ -80,11 +80,21 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
     final size = a.sizeBytes != null ? _humanSize(a.sizeBytes!) : '';
     return InkWell(
       onTap: _openExternally,
+      borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(12),
+        ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 28),
-          const SizedBox(width: 8),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(color: const Color(0xFF13B0A0).withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+            child: Icon(icon, size: 22, color: const Color(0xFF0E8C6D)),
+          ),
+          const SizedBox(width: 10),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
