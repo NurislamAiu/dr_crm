@@ -13,10 +13,13 @@ Flutter**, и тонкая веб-админка (настройка webhook, д
 | Этап | Содержание | Статус |
 |---|---|---|
 | 1 | WazzupApiClient, env, GET channels, диагностика | ✅ |
-| 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ (проверено e2e на Docker) |
-| 3 | Contact/Conversation/Message, входящие, realtime | ⏳ |
+| 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ (e2e на Docker) |
+| 3 | Contact/Conversation/Message, входящие, realtime (Socket.IO) | ✅ (e2e на Docker) |
 | 4 | Flutter-приложение (чаты/composer/статусы/push) | ⏳ |
 | 5–8 | отправка, медиа, RBAC, sync/мониторинг/тесты | ⏳ |
+
+Read-API для приложения: `GET /api/conversations`, `GET /api/conversations/:id/messages`.
+Realtime: Socket.IO на :3001 (`npm run realtime`), события §23 через Redis pub/sub.
 
 ## Структура (Этапы 1–2)
 
@@ -43,8 +46,10 @@ cp .env.example .env            # заполнить при необходимо
 docker compose up -d            # Postgres, Redis, MinIO
 npm install
 npm run db:migrate              # применить миграции Prisma
+npm run db:seed                 # организация default + менеджеры
 npm run dev                     # Next.js (API + админка) на :3000
-npm run worker                  # в отдельном терминале — BullMQ worker
+npm run worker                  # отдельный терминал — BullMQ worker
+npm run realtime                # отдельный терминал — Socket.IO на :3001
 ```
 
 Проверки:

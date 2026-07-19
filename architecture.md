@@ -199,7 +199,7 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 |---|---|---|
 | 1 | architecture.md, WazzupApiClient, env-валидация, GET channels, диагностика | ✅ готово |
 | 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ готово (проверено e2e на Docker) |
-| 3 | Contact/Conversation/Message, входящие, realtime (WebSocket) | ⏳ |
+| 3 | Contact/Conversation/Message, входящие, realtime (WebSocket) | ✅ готово (проверено e2e на Docker) |
 | 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread, push | ⏳ |
 | 5 | POST /v3/message, crmMessageId, статусы, retry | ⏳ |
 | 6 | медиа (S3), voice player, documents, image preview | ⏳ |
@@ -212,3 +212,19 @@ POST `{test:true}`→200; без секрета→401; входящий текс
 сообщение дедуплицировано по `provider+externalMessageId`; `missing_call`→
 подсказка; `messages`+`statuses` в одном webhook обработаны независимо;
 `chatId` нормализован; телефоны в логах маскируются. 33 юнит-теста зелёные.
+
+### Проверено на Этапе 3 (live, Docker + realtime)
+4 webhook с одним `chatId` → 1 Contact, 1 Conversation, дубли не создаются;
+unreadCount растёт только на входящих; авто-назначение менеджера + `Notification`
++ `AuditLog`; редактирование сохраняет `previousText`; удаление — мягкое
+(`deletedAt`, «Сообщение удалено», запись не удаляется физически); статус →
+`MessageStatusHistory` + обновление `Message.status`. Socket.IO раздал события
+`conversation.created/assigned/updated`, `message.created/updated`,
+`message.status.updated` подключённому клиенту в комнату организации. REST
+`GET /api/conversations` и `.../:id/messages` отдают данные для приложения.
+
+### Realtime (§23)
+Worker/API публикуют события в Redis pub/sub (`realtime:events`). Отдельный
+Socket.IO-сервер (`src/realtime/server.ts`, порт 3001) подписан на канал и
+раздаёт события в комнаты `org:{id}` / `conv:{org}:{id}` / `user:{id}` — каждый
+клиент получает только свою организацию. Аутентификация handshake — JWT (Этап 7).

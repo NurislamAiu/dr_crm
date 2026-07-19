@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/db";
 import { logger, maskPhone } from "@/lib/logger";
 import { normalizeWebhook, type NormalizedWebhook } from "@/lib/wazzup/normalizer";
+import { processInboundMessage } from "@/lib/inbound/process-inbound";
+import { processStatus } from "@/lib/inbound/process-status";
+import { publishRealtime } from "@/lib/realtime/events";
 
 export interface ProcessResult {
   messages: number;
@@ -12,7 +15,7 @@ export interface ProcessResult {
 /**
  * Обработка одного WazzupWebhookEvent (ТЗ §6, §8, §11, §17).
  * messages и statuses обрабатываются НЕЗАВИСИМО. Идемпотентна: повторный
- * прогон того же события не создаёт дублей (upsert по provider+externalMessageId).
+ * прогон не создаёт дублей (Message уникален по provider+externalMessageId).
  */
 export async function processWebhookEvent(eventId: string): Promise<ProcessResult> {
   const event = await prisma.wazzupWebhookEvent.findUnique({ where: { id: eventId } });
@@ -32,10 +35,7 @@ export async function processWebhookEvent(eventId: string): Promise<ProcessResul
   } catch (err) {
     await prisma.wazzupWebhookEvent.update({
       where: { id: eventId },
-      data: {
-        status: "failed",
-        error: `normalize: ${err instanceof Error ? err.message : String(err)}`,
-      },
+      data: { status: "failed", error: `normalize: ${err instanceof Error ? err.message : String(err)}` },
     });
     throw err;
   }
@@ -44,63 +44,44 @@ export async function processWebhookEvent(eventId: string): Promise<ProcessResul
 
   // --- Ветка 1: messages (независимо от statuses) ---
   for (const m of normalized.messages) {
-    const res = await prisma.inboundMessageReceipt.upsert({
-      where: { provider_externalMessageId: { provider: "wazzup", externalMessageId: m.externalMessageId } },
-      create: {
-        organizationId: event.organizationId,
-        provider: "wazzup",
-        externalMessageId: m.externalMessageId,
-        channelId: m.channelId,
-        chatType: m.chatType,
-        chatId: m.chatIdNormalized,
-        direction: m.direction,
-        type: m.type,
-        hasContent: m.hasContent,
-        isEdited: m.isEdited,
-        isDeleted: m.isDeleted,
-        providerDateTime: m.providerDateTime ? new Date(m.providerDateTime) : null,
-        webhookEventId: event.id,
-      },
-      update: {
-        // Повторный webhook по тому же messageId: обновляем изменяемые поля
-        // (редактирование/удаление), но не плодим записи (ТЗ §9, §11).
-        isEdited: m.isEdited,
-        isDeleted: m.isDeleted,
-        type: m.type,
-        hasContent: m.hasContent,
-      },
-      select: { createdAt: true, updatedAt: true },
+    const outcome = await processInboundMessage(m, {
+      organizationId: event.organizationId,
+      webhookEventId: event.id,
     });
-    // Новая запись, если createdAt == updatedAt (только что создана).
-    if (res.createdAt.getTime() === res.updatedAt.getTime()) newMessages += 1;
-
+    if (outcome.action === "created") newMessages += 1;
     logger.info("worker: сообщение обработано", {
       messageId: m.externalMessageId,
+      action: outcome.action,
       direction: m.direction,
       type: m.type,
-      rawType: m.rawType,
       chatId: maskPhone(m.chatIdNormalized),
-      isEdited: m.isEdited,
-      isDeleted: m.isDeleted,
       displayHint: m.displayHint,
     });
-    // Этап 3: здесь появится upsert Contact/Conversation/Message + WebSocket.
   }
 
   // --- Ветка 2: statuses (независимо от messages) ---
   for (const s of normalized.statuses) {
+    const outcome = await processStatus(s, event.organizationId);
     logger.info("worker: статус обработан", {
       messageId: s.externalMessageId,
       status: s.status,
+      outcome,
       errorCode: s.errorCode,
     });
-    // Этап 5: обновление Message.status + MessageStatusHistory + WebSocket.
   }
 
   // --- Ветка 3: channelsUpdates ---
   for (const c of normalized.channelUpdates) {
+    await prisma.wazzupChannel.updateMany({
+      where: { organizationId: event.organizationId, externalChannelId: c.channelId },
+      data: { state: c.state, lastCheckedAt: new Date() },
+    });
+    await publishRealtime({
+      event: "channel.state.updated",
+      organizationId: event.organizationId,
+      payload: { channelId: c.channelId, state: c.state },
+    });
     logger.info("worker: обновление канала", { channelId: c.channelId, state: c.state });
-    // Этап 3/8: обновление WazzupChannel.state + уведомление администратора.
   }
 
   await prisma.wazzupWebhookEvent.update({

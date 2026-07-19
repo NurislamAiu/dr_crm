@@ -1,6 +1,6 @@
-// Prisma schema — Этап 2.
-// Полный набор моделей (Contact/Conversation/Message/RBAC/...) добавляется на
-// Этапе 3+. Здесь — то, что нужно для приёма и дедупликации webhook.
+// Prisma schema — Этап 3.
+// Полный набор моделей CRM + интеграции Wazzup (ТЗ §22). Модель Message
+// заменяет временную InboundMessageReceipt из Этапа 2.
 
 generator client {
   provider = "prisma-client-js"
@@ -9,6 +9,330 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ==========================================================================
+// Организации / люди / RBAC
+// ==========================================================================
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String   @default("Default")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  contacts      Contact[]
+  conversations Conversation[]
+  messages      Message[]
+  channels      WazzupChannel[]
+}
+
+enum UserRole {
+  admin
+  manager
+  viewer
+}
+
+/// Менеджер CRM. id — стабильный UUID (используется как crmUserId в Wazzup, §20).
+model User {
+  id             String   @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  name           String
+  passwordHash   String?
+  role           UserRole @default(manager)
+  isActive       Boolean  @default(true)
+  /// Синхронизирован ли с Wazzup (POST /v3/users).
+  wazzupSyncedAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assignedConversations Conversation[]           @relation("assignedUser")
+  responsibleContacts   Contact[]                @relation("responsibleUser")
+  assignments           ConversationAssignment[]
+  notes                 InternalNote[]
+  notifications         Notification[]
+  teamMemberships       TeamMember[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  permissions    Permission[]
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, name])
+}
+
+model Permission {
+  id     String @id @default(uuid())
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  action String
+
+  @@unique([roleId, action])
+}
+
+model Team {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  members        TeamMember[]
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, name])
+}
+
+model TeamMember {
+  id       String @id @default(uuid())
+  teamId   String
+  team     Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime @default(now())
+
+  @@unique([teamId, userId])
+}
+
+// ==========================================================================
+// Контакты / диалоги / сообщения
+// ==========================================================================
+
+/// Клиент. Уникален по (organizationId, channelId, chatId) — без дублей (§11).
+model Contact {
+  id                String   @id @default(uuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channelId         String
+  chatType          String   @default("whatsapp")
+  /// Нормализованный chatId (для whatsapp — только цифры).
+  chatId            String
+  name              String
+  phone             String?
+  avatarUri         String?
+  responsibleUserId String?
+  responsibleUser   User?    @relation("responsibleUser", fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  conversations Conversation[]
+
+  @@unique([organizationId, channelId, chatId])
+  @@index([organizationId])
+}
+
+enum ConversationStatus {
+  open
+  pending
+  closed
+}
+
+model Conversation {
+  id                 String             @id @default(uuid())
+  organizationId     String
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contactId          String
+  contact            Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channelId          String
+  chatType           String             @default("whatsapp")
+  status             ConversationStatus @default(open)
+  assignedUserId     String?
+  assignedUser       User?              @relation("assignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  unreadCount        Int                @default(0)
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  messages    Message[]
+  assignments ConversationAssignment[]
+  notes       InternalNote[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, assignedUserId])
+  @@index([contactId])
+}
+
+model ConversationAssignment {
+  id             String   @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedByUserId String?
+  active         Boolean  @default(true)
+  assignedAt     DateTime @default(now())
+  releasedAt     DateTime?
+
+  @@index([conversationId, active])
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageStatus {
+  queued
+  sending
+  accepted
+  sent
+  delivered
+  read
+  failed
+  inbound
+}
+
+model Message {
+  id                String   @id @default(uuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversationId    String
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  provider          String   @default("wazzup")
+  /// Wazzup messageId (может отсутствовать до ответа Wazzup на исходящее).
+  externalMessageId String?
+  /// Наш идемпотентный id исходящего (§13).
+  crmMessageId      String?
+  channelId         String
+  chatType          String   @default("whatsapp")
+  chatId            String
+  direction         MessageDirection
+  /// Тип из ENUM Wazzup или "unknown"/"system".
+  type              String   @default("text")
+  rawType           String?
+  text              String?
+  status            MessageStatus @default(inbound)
+  isEdited          Boolean  @default(false)
+  editedAt          DateTime?
+  deletedAt         DateTime?
+  /// Текст до редактирования/удаления.
+  previousText      String?
+  authorName        String?
+  authorId          String?
+  displayHint       String?
+  replyToMessageId  String?
+  replyTo           Message? @relation("reply", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies           Message[] @relation("reply")
+  providerDateTime  DateTime?
+  webhookEventId    String?
+  rawPayload        Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  statusHistory MessageStatusHistory[]
+  attachments   MessageAttachment[]
+
+  // В Postgres несколько NULL считаются различными → до присвоения id уникальность не мешает.
+  @@unique([provider, externalMessageId])
+  @@unique([organizationId, crmMessageId])
+  @@index([conversationId, createdAt])
+  @@index([organizationId])
+}
+
+model MessageStatusHistory {
+  id                String   @id @default(uuid())
+  messageId         String
+  message           Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  status            String
+  providerTimestamp DateTime?
+  errorCode         String?
+  errorDescription  String?
+  rawPayload        Json?
+  createdAt         DateTime @default(now())
+
+  @@index([messageId, createdAt])
+}
+
+enum AttachmentStatus {
+  pending
+  downloading
+  stored
+  failed
+}
+
+/// Вложение сообщения. Скачивание в S3 — Этап 6.
+model MessageAttachment {
+  id                String   @id @default(uuid())
+  messageId         String
+  message           Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  kind              String   // image|audio|video|document|vcard|geo|...
+  mimeType          String?
+  sizeBytes         Int?
+  storageKey        String?
+  sha256            String?
+  originalContentUri String?
+  status            AttachmentStatus @default(pending)
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([messageId])
+}
+
+/// Внутренняя заметка. НИКОГДА не отправляется в Wazzup (§19).
+model InternalNote {
+  id             String   @id @default(uuid())
+  organizationId String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  authorUserId   String
+  author         User     @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  text           String
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model Task {
+  id             String   @id @default(uuid())
+  organizationId String
+  conversationId String?
+  assignedUserId String?
+  title          String
+  status         String   @default("open")
+  dueAt          DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+// ==========================================================================
+// Интеграция Wazzup
+// ==========================================================================
+
+model WazzupIntegration {
+  id             String   @id @default(uuid())
+  organizationId String   @unique
+  webhooksUri    String?
+  subscriptions  Json?
+  lastSyncAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model WazzupChannel {
+  id                String   @id @default(uuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  externalChannelId String
+  transport         String
+  plainId           String
+  state             String
+  lastCheckedAt     DateTime?
+  lastError         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([organizationId, externalChannelId])
+  @@index([organizationId])
 }
 
 enum WebhookEventStatus {
@@ -21,13 +345,9 @@ enum WebhookEventStatus {
 /// Сырое хранилище входящих webhook (ТЗ §6 п.7). Никогда не теряем payload.
 model WazzupWebhookEvent {
   id                 String             @id @default(uuid())
-  /// Источник/идентификатор организации (single-tenant по умолчанию).
   organizationId     String             @default("default")
-  /// SHA-256 сырого тела — идемпотентность приёма (дедуп одинаковых webhook).
   payloadSha256      String
-  /// Сырой payload целиком (не теряем неизвестные поля).
   rawPayload         Json
-  /// Был ли это тестовый пинг { test: true }.
   isTest             Boolean            @default(false)
   messageCount       Int                @default(0)
   statusCount        Int                @default(0)
@@ -38,36 +358,54 @@ model WazzupWebhookEvent {
   receivedAt         DateTime           @default(now())
   processedAt        DateTime?
 
-  receipts InboundMessageReceipt[]
-
   @@unique([organizationId, payloadSha256])
   @@index([status])
   @@index([receivedAt])
 }
 
-/// Дедуп входящих сообщений на уровне провайдерского messageId (ТЗ §11).
-/// Предшественник модели Message (Этап 3), которая будет ссылаться на эти данные.
-model InboundMessageReceipt {
-  id                String   @id @default(uuid())
-  organizationId    String   @default("default")
-  provider          String   @default("wazzup")
-  /// Wazzup messageId.
-  externalMessageId String
-  channelId         String
-  chatType          String
-  chatId            String
-  /// inbound | outbound (по isEcho).
-  direction         String
-  type              String
-  hasContent        Boolean  @default(false)
-  isEdited          Boolean  @default(false)
-  isDeleted         Boolean  @default(false)
-  providerDateTime  DateTime?
-  webhookEventId    String?
-  webhookEvent      WazzupWebhookEvent? @relation(fields: [webhookEventId], references: [id], onDelete: SetNull)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+model WazzupSyncJob {
+  id             String   @id @default(uuid())
+  organizationId String
+  kind           String   // users|contacts|channels
+  status         String   @default("pending")
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  error          String?
+  stats          Json?
+  createdAt      DateTime @default(now())
 
-  @@unique([provider, externalMessageId])
-  @@index([organizationId, channelId, chatId])
+  @@index([organizationId, kind])
+}
+
+// ==========================================================================
+// Служебное
+// ==========================================================================
+
+model Notification {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           String
+  conversationId String?
+  messageId      String?
+  payload        Json?
+  readAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([userId, readAt])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  actorType      String   @default("system") // system|user
+  actorUserId    String?
+  action         String
+  entityType     String?
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
 }
