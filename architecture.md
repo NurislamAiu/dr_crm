@@ -42,6 +42,8 @@
 | 9 | Auth webhook | «Bearer WAZZUP_WEBHOOK_SECRET, если Wazzup передаёт crmKey» | Wazzup шлёт `Authorization: Bearer ${crmKey}` **только если crmKey задан в аккаунте**. `crmKey` задаётся в настройках аккаунта, а **не** в `PATCH /v3/webhooks` | Поддерживаем оба варианта: (а) заголовок `Authorization: Bearer <secret>` и (б) `?secret=` в URL. `webhooksUri` ≤ 200 символов. |
 | 10 | Редактирование/удаление | edit `PATCH /v3/message/:id`, delete `DELETE /v3/message/:id` | `PATCH /v3/message/:id` подтверждён (поля `crmUserId,text,contentUri`, text/contentUri взаимоисключающие). `DELETE /v3/message/:id` — по паттерну, **подлежит финальной проверке поддержки для whatsapp перед Этапом 6/16** | Клиент реализует оба метода, но UI-кнопки скрываем, пока поддержка для `whatsapp` не подтверждена рантайм-ответом. |
 | 11 | `chatType` для группы | — | Помимо `whatsapp` есть `whatsgroup` (группы). В текущей версии не используем | Жёстко фиксируем `chatType="whatsapp"`; `whatsgroup` вне scope. |
+| 12 | `GET /v3/webhooks` пока не настроен | — | Живой API возвращает `webhooksUri: **null**` (не строку) — проверено на реальном ключе | Схема `webhooksUri: string \| null`. |
+| 13 | Поле подписки на WABA-шаблоны | `templateStatus` | Живой `GET /v3/webhooks` возвращает **`wabaTemplatesStatus`** (в текстовой доке — `templateStatus`) | Принимаем оба имени (`.passthrough()`); для QR не критично. |
 
 **Дополнительно подтверждено документацией (не расхождения, но важно):**
 - `POST /v3/message` → **HTTP 201** `{ messageId, chatId }`. Это **только приём Wazzup**, не факт доставки клиенту.

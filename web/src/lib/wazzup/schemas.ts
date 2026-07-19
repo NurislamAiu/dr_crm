@@ -70,16 +70,22 @@ export const SendMessageResponseSchema = z.object({
 export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
 
 // --- Настройки webhook (GET/PATCH /v3/webhooks) ---
-export const WebhookSubscriptionsSchema = z.object({
-  messagesAndStatuses: z.boolean().optional(),
-  contactsAndDealsCreation: z.boolean().optional(),
-  channelsUpdates: z.boolean().optional(),
-  templateStatus: z.boolean().optional(),
-});
+export const WebhookSubscriptionsSchema = z
+  .object({
+    messagesAndStatuses: z.boolean().optional(),
+    contactsAndDealsCreation: z.boolean().optional(),
+    channelsUpdates: z.boolean().optional(),
+    // В доке поле называется templateStatus, но живой API возвращает
+    // wabaTemplatesStatus — принимаем оба (проверено на реальном ответе).
+    templateStatus: z.boolean().optional(),
+    wabaTemplatesStatus: z.boolean().optional(),
+  })
+  .passthrough();
 export type WebhookSubscriptions = z.infer<typeof WebhookSubscriptionsSchema>;
 
 export const WebhookSettingsSchema = z.object({
-  webhooksUri: z.string(),
+  // Пока webhook не настроен, Wazzup возвращает webhooksUri: null.
+  webhooksUri: z.string().nullable(),
   subscriptions: WebhookSubscriptionsSchema,
 });
 export type WebhookSettings = z.infer<typeof WebhookSettingsSchema>;

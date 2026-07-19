@@ -24,8 +24,8 @@ export interface WazzupDiagnostics {
   };
   webhook: {
     configured: boolean;
-    webhooksUri?: string;
-    subscriptions?: Record<string, boolean | undefined>;
+    webhooksUri?: string | null;
+    subscriptions?: Record<string, unknown>;
     error?: string;
   };
   checkedAt: string;
