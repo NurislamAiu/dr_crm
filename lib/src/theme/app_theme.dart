@@ -49,6 +49,12 @@ LinearGradient avatarGradient(String seed) {
   return LinearGradient(colors: palettes[idx], begin: Alignment.topLeft, end: Alignment.bottomRight);
 }
 
+/// Флаг страны по номеру: Казахстан (+7 7xx) → kz.png, остальные → rus.png.
+String flagAsset(String label) {
+  final digits = label.replaceAll(RegExp(r'\D'), '');
+  return digits.startsWith('77') ? 'assets/kz.png' : 'assets/rus.png';
+}
+
 /// Глиф для аватара БЕЗ персональных данных — только KZ или RUS.
 /// Казахстан = +7 7xx (начинается с 77); все остальные номера — RUS.
 /// Фото пациента не используется по требованиям приватности.

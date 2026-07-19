@@ -74,7 +74,7 @@ class _ConversationTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            _Avatar(seed: c.contact.chatId ?? c.contact.name, label: c.contact.name),
+            _Avatar(label: c.contact.chatId ?? c.contact.name),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -128,8 +128,7 @@ class _ConversationTile extends StatelessWidget {
 }
 
 class _Avatar extends StatelessWidget {
-  const _Avatar({required this.seed, required this.label});
-  final String seed;
+  const _Avatar({required this.label});
   final String label;
 
   @override
@@ -138,13 +137,11 @@ class _Avatar extends StatelessWidget {
       width: 52,
       height: 52,
       decoration: BoxDecoration(
-        gradient: avatarGradient(seed),
         shape: BoxShape.circle,
-        boxShadow: [BoxShadow(color: avatarGradient(seed).colors.first.withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 4))],
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.14), blurRadius: 8, offset: const Offset(0, 3))],
       ),
-      alignment: Alignment.center,
-      child: Text(avatarGlyph(label),
-          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: 0.2)),
+      child: ClipOval(child: Image.asset(flagAsset(label), fit: BoxFit.cover)),
     );
   }
 }
