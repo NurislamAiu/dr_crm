@@ -201,7 +201,7 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 | 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ готово (проверено e2e на Docker) |
 | 3 | Contact/Conversation/Message, входящие, realtime (WebSocket) | ✅ готово (проверено e2e на Docker) |
 | 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread, push | ⏳ |
-| 5 | POST /v3/message, crmMessageId, статусы, retry | ⏳ |
+| 5 | POST /v3/message, crmMessageId, статусы, retry | ✅ готово (проверено e2e с mock Wazzup) |
 | 6 | медиа (S3), voice player, documents, image preview | ⏳ |
 | 7 | менеджеры, распределение, RBAC, внутренние заметки | ⏳ |
 | 8 | contacts/users sync, мониторинг (админка), тесты, hardening | ⏳ |
@@ -222,6 +222,29 @@ unreadCount растёт только на входящих; авто-назна
 `conversation.created/assigned/updated`, `message.created/updated`,
 `message.status.updated` подключённому клиенту в комнату организации. REST
 `GET /api/conversations` и `.../:id/messages` отдают данные для приложения.
+
+### Проверено на Этапе 5 (live, mock Wazzup)
+Отправка менеджера: локальное сообщение создаётся `queued` с `crmMessageId` ДО
+вызова Wazzup, очередь отправки вызывает `POST /v3/message` → `accepted` +
+сохранён Wazzup `messageId`; статус-webhook `delivered/read` обновляет исходящее
++ пишет историю; при канале `qr` отправка блокируется (`failed` с причиной);
+«Повторить» переиспользует то же сообщение и **тот же `crmMessageId`** без дубля;
+`REPEATED_CRM_MESSAGE_ID` трактуется как «уже отправлено». channelId/crmUserId —
+только backend. Отправка тестируется на mock (`src/scripts/mock-wazzup.ts`),
+реальные WhatsApp-сообщения не уходят (§27).
+
+### Поток отправки (§12)
+```
+POST /api/conversations/:id/messages/send (text[, replyToMessageId])
+  → создать Message(queued, crmMessageId=uuid, direction=outbound)  ← ДО Wazzup
+  → сбросить unreadCount, realtime message.created, enqueue send
+send-worker → guard: канал active? → Wazzup POST /v3/message(crmMessageId)
+  → 201: externalMessageId + status=accepted; realtime message.status.updated
+  → REPEATED_CRM_MESSAGE_ID → already_sent (без дубля)
+  → 429/5xx/timeout → BullMQ retry тем же crmMessageId
+  → прочие 4xx / канал не active → failed (+ кнопка «Повторить»)
+webhook statuses → sent/delivered/read/failed + MessageStatusHistory
+```
 
 ### Realtime (§23)
 Worker/API публикуют события в Redis pub/sub (`realtime:events`). Отдельный

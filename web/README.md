@@ -15,11 +15,17 @@ Flutter**, и тонкая веб-админка (настройка webhook, д
 | 1 | WazzupApiClient, env, GET channels, диагностика | ✅ |
 | 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ (e2e на Docker) |
 | 3 | Contact/Conversation/Message, входящие, realtime (Socket.IO) | ✅ (e2e на Docker) |
+| 5 | отправка (POST /v3/message), crmMessageId, статусы, retry | ✅ (e2e с mock) |
 | 4 | Flutter-приложение (чаты/composer/статусы/push) | ⏳ |
-| 5–8 | отправка, медиа, RBAC, sync/мониторинг/тесты | ⏳ |
+| 6–8 | медиа, RBAC, sync/мониторинг/тесты | ⏳ |
 
-Read-API для приложения: `GET /api/conversations`, `GET /api/conversations/:id/messages`.
+API для приложения:
+- `GET /api/conversations`, `GET /api/conversations/:id/messages`
+- `POST /api/conversations/:id/messages/send` (тело: `text`, `replyToMessageId?`)
+- `POST /api/messages/:id/retry`
 Realtime: Socket.IO на :3001 (`npm run realtime`), события §23 через Redis pub/sub.
+Локальный mock Wazzup для e2e отправки: `node --import tsx src/scripts/mock-wazzup.ts` (:4000),
+затем запустить worker с `WAZZUP_API_BASE_URL=http://localhost:4000`.
 
 ## Структура (Этапы 1–2)
 

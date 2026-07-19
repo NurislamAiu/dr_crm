@@ -2,7 +2,9 @@ import { Worker } from "bullmq";
 import { getRedis } from "@/lib/redis";
 import { logger } from "@/lib/logger";
 import { WEBHOOK_QUEUE_NAME, type WebhookJobData } from "@/lib/queue/webhook-queue";
+import { SEND_QUEUE_NAME, type SendJobData } from "@/lib/queue/send-queue";
 import { processWebhookEvent } from "./process-webhook-event";
+import { processSend } from "./process-send";
 
 /**
  * Отдельный процесс-воркер BullMQ (ТЗ §1: тяжёлая работа вне HTTP-запроса).
@@ -19,19 +21,29 @@ const worker = new Worker<WebhookJobData>(
   { connection: getRedis(), concurrency: 5 },
 );
 
+const sendWorker = new Worker<SendJobData>(
+  SEND_QUEUE_NAME,
+  async (job) => {
+    const outcome = await processSend(job.data.messageId);
+    logger.info("send-worker: отправка обработана", { messageId: job.data.messageId, outcome });
+    return outcome;
+  },
+  { connection: getRedis(), concurrency: 5 },
+);
+
 worker.on("failed", (job, err) => {
-  logger.error("worker: джоба провалилась", {
-    jobId: job?.id,
-    attempts: job?.attemptsMade,
-    error: err.message,
-  });
+  logger.error("worker: джоба провалилась", { jobId: job?.id, attempts: job?.attemptsMade, error: err.message });
+});
+sendWorker.on("failed", (job, err) => {
+  logger.error("send-worker: джоба провалилась", { jobId: job?.id, attempts: job?.attemptsMade, error: err.message });
 });
 
 worker.on("ready", () => logger.info("worker: готов, слушаю очередь", { queue: WEBHOOK_QUEUE_NAME }));
+sendWorker.on("ready", () => logger.info("send-worker: готов, слушаю очередь", { queue: SEND_QUEUE_NAME }));
 
 async function shutdown(signal: string): Promise<void> {
   logger.info("worker: остановка", { signal });
-  await worker.close();
+  await Promise.all([worker.close(), sendWorker.close()]);
   process.exit(0);
 }
 process.on("SIGINT", () => void shutdown("SIGINT"));

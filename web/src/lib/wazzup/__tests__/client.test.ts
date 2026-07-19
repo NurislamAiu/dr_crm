@@ -150,6 +150,24 @@ test("sendTextMessage: 201 возвращает messageId и chatId", async () =
   assert.equal(sent.clearUnanswered, true);
 });
 
+// 19. Reply через refMessageId (§15)
+test("replyToMessage: передаёт refMessageId (Wazzup messageId)", async () => {
+  const server = new MockWazzupServer().on("POST /v3/message", {
+    status: 201,
+    body: { messageId: "m2", chatId: "77011234567" },
+  });
+  await makeClient(server).replyToMessage({
+    channelId: "c1",
+    chatId: "77011234567",
+    text: "Ответ",
+    refMessageId: "wazzup-orig-id",
+    crmMessageId: "uuid-r",
+  });
+  const sent = server.requests[0]?.body as Record<string, unknown>;
+  assert.equal(sent.refMessageId, "wazzup-orig-id");
+  assert.equal(sent.chatType, "whatsapp");
+});
+
 // editMessage: нельзя text и contentUri одновременно
 test("editMessage: запрещает text и contentUri вместе", async () => {
   const server = new MockWazzupServer();
