@@ -51,7 +51,9 @@ export async function processInboundMessage(
 
   const result = await prisma.$transaction(async (tx): Promise<InboundOutcome> => {
     // --- 1. Контакт (уникален по org+channel+chatId, без дублей §11) ---
-    const displayName = m.contactName?.trim() || formatPhone(m.chatIdNormalized);
+    // По требованию: идентифицируем контакт по номеру телефона, имя из
+    // WhatsApp не используем (можно вернуть, подставив m.contactName).
+    const displayName = formatPhone(m.chatIdNormalized);
     const contactBefore = await tx.contact.findUnique({
       where: {
         organizationId_channelId_chatId: {
@@ -78,8 +80,8 @@ export async function processInboundMessage(
         name: displayName,
         phone: m.contactPhone ?? (m.chatType === "whatsapp" ? m.chatIdNormalized : null),
       },
-      // На повторном webhook имя обновляем только если пришло непустое (не портим §11 п.4).
-      update: m.contactName?.trim() ? { name: m.contactName.trim() } : {},
+      // Имя не трогаем — контакт идентифицируется номером телефона.
+      update: {},
       select: { id: true },
     });
     const contactCreated = !contactBefore;
