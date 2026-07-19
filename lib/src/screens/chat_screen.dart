@@ -125,25 +125,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _editMessage(Message m) async {
-    final controller = TextEditingController(text: m.text ?? '');
+    // Диалог владеет своим контроллером (не освобождаем во время анимации закрытия).
     final newText = await showDialog<String>(
       context: context,
-      builder: (dialog) => AlertDialog(
-        title: const Text('Изменить сообщение'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          minLines: 1,
-          maxLines: 6,
-          decoration: const InputDecoration(hintText: 'Текст сообщения…'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(dialog, controller.text.trim()), child: const Text('Сохранить')),
-        ],
-      ),
+      builder: (_) => _EditMessageDialog(initial: m.text ?? ''),
     );
-    controller.dispose();
     if (newText == null || newText.isEmpty || newText == m.text) return;
     try {
       await ref.read(messagesProvider(_convId).notifier).edit(_convId, m.id, newText);
@@ -177,91 +163,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _openNotes() async {
-    final api = ref.read(apiClientProvider);
-    final noteController = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  const Icon(Icons.lock_outline, size: 18, color: AppColors.brand),
-                  const SizedBox(width: 8),
-                  Text('Внутренние заметки', style: Theme.of(context).textTheme.titleMedium),
-                ]),
-                const SizedBox(height: 2),
-                Text('Не видны клиенту', style: TextStyle(color: context.semantic.textSecondary, fontSize: 12)),
-                const SizedBox(height: 12),
-                FutureBuilder<List<Map<String, dynamic>>>(
-                  future: api.getNotes(_convId),
-                  builder: (context, snap) {
-                    final notes = snap.data ?? [];
-                    if (notes.isEmpty) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Text('Заметок пока нет', style: TextStyle(color: context.semantic.textSecondary)),
-                      );
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (final n in notes)
-                          Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AppColors.brand.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(n['text'] as String? ?? ''),
-                                const SizedBox(height: 2),
-                                Text((n['author'] as Map?)?['name'] as String? ?? '',
-                                    style: TextStyle(fontSize: 11, color: context.semantic.textSecondary)),
-                              ],
-                            ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: noteController,
-                      decoration: const InputDecoration(hintText: 'Новая заметка…'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _CircleGradientButton(
-                    icon: Icons.add,
-                    onTap: () async {
-                      final text = noteController.text.trim();
-                      if (text.isEmpty) return;
-                      await api.addNote(_convId, text);
-                      if (context.mounted) Navigator.of(context).pop();
-                    },
-                  ),
-                ]),
-              ],
-            ),
-          ),
-        ),
-      ),
+      builder: (_) => _NotesSheet(conversationId: _convId),
     );
-    noteController.dispose();
   }
 
   @override
@@ -640,6 +548,140 @@ class _CircleGradientButton extends StatelessWidget {
         child: busy
             ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
             : Icon(icon, color: Colors.white, size: 22),
+      ),
+    );
+  }
+}
+
+/// Диалог изменения сообщения — сам владеет контроллером (безопасно при закрытии).
+class _EditMessageDialog extends StatefulWidget {
+  const _EditMessageDialog({required this.initial});
+  final String initial;
+
+  @override
+  State<_EditMessageDialog> createState() => _EditMessageDialogState();
+}
+
+class _EditMessageDialogState extends State<_EditMessageDialog> {
+  late final TextEditingController _controller = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Изменить сообщение'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        minLines: 1,
+        maxLines: 6,
+        decoration: const InputDecoration(hintText: 'Текст сообщения…'),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+        FilledButton(onPressed: () => Navigator.pop(context, _controller.text.trim()), child: const Text('Сохранить')),
+      ],
+    );
+  }
+}
+
+/// Лист внутренних заметок — владеет контроллером и Future списка.
+class _NotesSheet extends ConsumerStatefulWidget {
+  const _NotesSheet({required this.conversationId});
+  final String conversationId;
+
+  @override
+  ConsumerState<_NotesSheet> createState() => _NotesSheetState();
+}
+
+class _NotesSheetState extends ConsumerState<_NotesSheet> {
+  final _controller = TextEditingController();
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = ref.read(apiClientProvider).getNotes(widget.conversationId);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _add() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    await ref.read(apiClientProvider).addNote(widget.conversationId, text);
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Icon(Icons.lock_outline, size: 18, color: AppColors.brand),
+                const SizedBox(width: 8),
+                Text('Внутренние заметки', style: Theme.of(context).textTheme.titleMedium),
+              ]),
+              const SizedBox(height: 2),
+              Text('Не видны клиенту', style: TextStyle(color: context.semantic.textSecondary, fontSize: 12)),
+              const SizedBox(height: 12),
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _future,
+                builder: (context, snap) {
+                  final notes = snap.data ?? [];
+                  if (notes.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text('Заметок пока нет', style: TextStyle(color: context.semantic.textSecondary)),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final n in notes)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12)),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(n['text'] as String? ?? ''),
+                              const SizedBox(height: 2),
+                              Text((n['author'] as Map?)?['name'] as String? ?? '',
+                                  style: TextStyle(fontSize: 11, color: context.semantic.textSecondary)),
+                            ],
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: TextField(controller: _controller, decoration: const InputDecoration(hintText: 'Новая заметка…'))),
+                const SizedBox(width: 8),
+                _CircleGradientButton(icon: Icons.add, onTap: _add),
+              ]),
+            ],
+          ),
+        ),
       ),
     );
   }
