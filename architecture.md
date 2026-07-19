@@ -204,7 +204,7 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 | 5 | POST /v3/message, crmMessageId, статусы, retry | ✅ готово (проверено e2e с mock Wazzup) |
 | 6 | медиа (S3): входящие download→MinIO, отправка вложений, просмотр | ✅ готово (e2e); voice-плеер со скоростями — follow-up |
 | 7 | JWT-логин, RBAC, захват/передача/закрытие, заметки, «печатает» | ✅ готово (e2e) |
-| 8 | contacts/users sync, мониторинг (админка), тесты, hardening | ⏳ |
+| 8 | contacts/users sync, мониторинг (админка), тесты, hardening | ✅ готово (e2e) |
 
 ### Проверено на Этапе 2 (live, Docker)
 POST `{test:true}`→200; без секрета→401; входящий текст→сохранён+обработан;
@@ -268,6 +268,16 @@ JWT-логин (`POST /api/auth/login`, scrypt-пароли, HS256-токен) �
 в Wazzup не уходит). Realtime handshake верифицирует JWT; событие `user.typing`.
 Доступ к чужому диалогу → 404 (org-scoped, §24/#26). Flutter: экран логина, Bearer,
 меню захват/закрыть/переоткрыть, лист заметок, выход.
+
+### Проверено на Этапе 8 (live, mock + build)
+Синхронизация `POST /v3/users` и `/v3/contacts` батчами ≤100 с паузой (лимит §26),
+`WazzupSyncJob` фиксирует прогон; `id` пользователя — стабильный UUID (не email).
+Админ-эндпойнты (только admin, manager→403): `GET /admin/wazzup/diagnostics` (§25:
+Wazzup-подключение, канал, webhook, Redis/PostgreSQL, счётчики очередей, сообщений
+за 24ч, failed webhook), `GET/POST /admin/wazzup/webhooks` («Проверить»/«Настроить»),
+`POST /admin/wazzup/sync`. Тонкая веб-админка `/admin/wazzup`. Hardening: middleware
+с security-заголовками, rate-limit логина (10/мин → 429). `next build` — успешно.
+42 backend-теста. Дальше для прод: HTTPS/домен, бэкапы БД, distributed rate-limit (Redis).
 
 ### Realtime (§23)
 Worker/API публикуют события в Redis pub/sub (`realtime:events`). Отдельный

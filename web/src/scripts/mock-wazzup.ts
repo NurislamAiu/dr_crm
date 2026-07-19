@@ -36,6 +36,26 @@ const server = createServer((req, res) => {
     ]);
   }
 
+  // Этап 8: users / contacts / webhooks
+  if (req.method === "POST" && (url.pathname === "/v3/users" || url.pathname === "/v3/contacts")) {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => send(200, []));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/v3/webhooks") {
+    return send(200, {
+      webhooksUri: "https://example.com/api/webhooks/wazzup?secret=***",
+      subscriptions: { messagesAndStatuses: true, channelsUpdates: true },
+    });
+  }
+  if (req.method === "PATCH" && url.pathname === "/v3/webhooks") {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => send(200, { ok: true }));
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/v3/message") {
     let raw = "";
     req.on("data", (c) => (raw += c));

@@ -19,9 +19,10 @@ Flutter**, и тонкая веб-админка (настройка webhook, д
 | 4 | Flutter-приложение (чаты/composer/статусы) | ✅ (analyze+тесты) |
 | 6 | медиа (S3/MinIO): входящие download, отправка вложений, signed URL | ✅ (e2e) |
 | 7 | JWT-логин, RBAC, захват/передача/закрытие, заметки, «печатает» | ✅ (e2e) |
-| 8 | sync users/contacts, диагностика §25, тесты, hardening | ⏳ |
+| 8 | sync users/contacts, диагностика §25, admin, hardening | ✅ (e2e + build) |
 
-Авторизация: `POST /api/auth/login` → JWT (Bearer). DEV-логин: `manager@example.com` / `password`.
+Авторизация: `POST /api/auth/login` → JWT (Bearer). DEV-логин: `manager@example.com` / `password`
+(и `admin@example.com` / `password`). Веб-админка: `/admin/wazzup` (только admin).
 
 API для приложения:
 - `GET /api/conversations`, `GET /api/conversations/:id/messages`
@@ -32,6 +33,7 @@ API для приложения:
 - `POST /api/auth/login` (email/password → JWT)
 - `POST /api/conversations/:id/action` (claim|transfer|close|reopen)
 - `GET|POST /api/conversations/:id/notes` (внутренние заметки)
+- `GET /api/admin/wazzup/diagnostics` · `GET|POST /api/admin/wazzup/webhooks` · `POST /api/admin/wazzup/sync` (admin)
 Realtime: Socket.IO на :3001 (`npm run realtime`), события §23 через Redis pub/sub.
 Локальный mock Wazzup для e2e отправки: `node --import tsx src/scripts/mock-wazzup.ts` (:4000),
 затем запустить worker с `WAZZUP_API_BASE_URL=http://localhost:4000`.
