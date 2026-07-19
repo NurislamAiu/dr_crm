@@ -153,30 +153,32 @@ export const WebhookMessageSchema = z.object({
   error: z
     .object({ error: z.string(), description: z.string().optional() })
     .nullish(),
-  text: z.string().optional(),
-  contentUri: z.string().optional(),
-  authorName: z.string().optional(),
-  authorId: z.string().optional(),
+  // Живой Wazzup может присылать null в опциональных строковых полях
+  // (проверено на реальных webhook) → nullish, а не optional.
+  text: z.string().nullish(),
+  contentUri: z.string().nullish(),
+  authorName: z.string().nullish(),
+  authorId: z.string().nullish(),
   isEcho: z.boolean(),
   contact: z
     .object({
-      name: z.string().optional(),
-      avatarUri: z.string().optional(),
-      username: z.string().optional(),
-      phone: z.string().optional(),
+      name: z.string().nullish(),
+      avatarUri: z.string().nullish(),
+      username: z.string().nullish(),
+      phone: z.string().nullish(),
     })
-    .optional(),
+    .nullish(),
   quotedMessage: z.unknown().optional(),
-  sentFromApp: z.boolean().optional(),
-  isEdited: z.boolean().optional(),
-  isDeleted: z.boolean().optional(),
+  sentFromApp: z.boolean().nullish(),
+  isEdited: z.boolean().nullish(),
+  isDeleted: z.boolean().nullish(),
   oldInfo: z
     .object({
-      oldText: z.string().optional(),
-      oldAuthorId: z.string().optional(),
-      oldAuthorName: z.string().optional(),
+      oldText: z.string().nullish(),
+      oldAuthorId: z.string().nullish(),
+      oldAuthorName: z.string().nullish(),
     })
-    .optional(),
+    .nullish(),
 });
 export type WebhookMessage = z.infer<typeof WebhookMessageSchema>;
 

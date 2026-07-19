@@ -19,6 +19,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx src/scripts/seed.ts",
+    "db:reprocess-failed": "tsx src/scripts/reprocess-failed.ts",
     "db:studio": "prisma studio"
   },
   "prisma": {
