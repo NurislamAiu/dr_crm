@@ -1,8 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:crm/src/models/models.dart';
+import 'package:crm/src/theme/app_theme.dart';
 
 void main() {
+  test('avatarGlyph: страна по номеру (KZ/RUS)', () {
+    expect(avatarGlyph('77073845561'), 'KZ');
+    expect(avatarGlyph('+7 705 111 22 33'), 'KZ');
+    expect(avatarGlyph('79185446683'), 'RUS');
+    expect(avatarGlyph('380971112233'), '+38');
+    expect(avatarGlyph(''), '#');
+  });
+
   test('Conversation.fromJson парсит поля и контакт', () {
     final c = Conversation.fromJson({
       'id': 'conv-1',

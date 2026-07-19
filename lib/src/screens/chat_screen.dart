@@ -174,7 +174,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               height: 40,
               decoration: BoxDecoration(gradient: avatarGradient(widget.conversation.contact.chatId ?? ''), shape: BoxShape.circle),
               alignment: Alignment.center,
-              child: const Icon(Icons.person, color: Colors.white, size: 22),
+              child: Text(
+                avatarGlyph(widget.conversation.contact.chatId ?? widget.conversation.contact.name),
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(

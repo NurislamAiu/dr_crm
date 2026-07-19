@@ -134,8 +134,6 @@ class _Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final clean = label.replaceAll(RegExp(r'[^0-9A-Za-zА-Яа-я]'), '');
-    final initial = clean.isNotEmpty ? clean.characters.last.toUpperCase() : '#';
     return Container(
       width: 52,
       height: 52,
@@ -145,7 +143,8 @@ class _Avatar extends StatelessWidget {
         boxShadow: [BoxShadow(color: avatarGradient(seed).colors.first.withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 4))],
       ),
       alignment: Alignment.center,
-      child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+      child: Text(avatarGlyph(label),
+          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: 0.2)),
     );
   }
 }
