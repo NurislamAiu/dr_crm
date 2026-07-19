@@ -6,6 +6,7 @@ import '../models/models.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'chat_screen.dart';
+import 'search_screen.dart';
 import 'settings_screen.dart';
 
 /// Экран списка диалогов (§18, mobile: отдельный экран списка).
@@ -20,6 +21,13 @@ class ConversationsScreen extends ConsumerWidget {
         titleSpacing: 20,
         title: const Text('Диалоги'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Поиск',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SearchScreen()),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: IconButton.filledTonal(

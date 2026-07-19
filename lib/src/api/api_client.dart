@@ -28,6 +28,16 @@ class ApiClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Поиск по диалогам (номер/имя) и по тексту сообщений.
+  Future<SearchResults> search(String query) async {
+    final res = await http.get(
+      _uri('/api/search?q=${Uri.encodeQueryComponent(query)}'),
+      headers: _headers,
+    );
+    _ensureOk(res);
+    return SearchResults.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
   /// Отметить диалог прочитанным (сброс непрочитанных).
   Future<void> markRead(String conversationId) async {
     final res = await http.post(_uri('/api/conversations/$conversationId/read'), headers: _headers);

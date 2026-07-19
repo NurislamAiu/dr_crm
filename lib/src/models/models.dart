@@ -142,3 +142,38 @@ DateTime? _parseDate(dynamic v) {
   if (v is String && v.isNotEmpty) return DateTime.tryParse(v)?.toLocal();
   return null;
 }
+
+/// Найденное сообщение (с его диалогом) в результатах поиска.
+class MessageHit {
+  MessageHit({required this.id, required this.direction, this.text, this.createdAt, required this.conversation});
+  final String id;
+  final String direction;
+  final String? text;
+  final DateTime? createdAt;
+  final Conversation conversation;
+
+  factory MessageHit.fromJson(Map<String, dynamic> j) => MessageHit(
+        id: j['id'] as String,
+        direction: j['direction'] as String? ?? 'inbound',
+        text: j['text'] as String?,
+        createdAt: _parseDate(j['createdAt']),
+        conversation: Conversation.fromJson(j['conversation'] as Map<String, dynamic>),
+      );
+}
+
+class SearchResults {
+  SearchResults({required this.conversations, required this.messages});
+  final List<Conversation> conversations;
+  final List<MessageHit> messages;
+
+  bool get isEmpty => conversations.isEmpty && messages.isEmpty;
+
+  factory SearchResults.fromJson(Map<String, dynamic> j) => SearchResults(
+        conversations: ((j['conversations'] as List<dynamic>?) ?? [])
+            .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        messages: ((j['messages'] as List<dynamic>?) ?? [])
+            .map((e) => MessageHit.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
