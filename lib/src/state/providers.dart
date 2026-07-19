@@ -114,6 +114,16 @@ class MessagesNotifier extends FamilyAsyncNotifier<List<Message>, String> {
     await ref.read(apiClientProvider).retryMessage(messageId);
     await refresh(conversationId);
   }
+
+  Future<void> edit(String conversationId, String messageId, String text) async {
+    await ref.read(apiClientProvider).editMessage(messageId, text);
+    await refresh(conversationId);
+  }
+
+  Future<void> remove(String conversationId, String messageId) async {
+    await ref.read(apiClientProvider).deleteMessage(messageId);
+    await refresh(conversationId);
+  }
 }
 
 final messagesProvider =

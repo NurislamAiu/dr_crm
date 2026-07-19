@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
@@ -19,6 +21,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _input = TextEditingController();
   bool _sending = false;
+  Timer? _poll;
 
   String get _convId => widget.conversation.id;
 
@@ -31,10 +34,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (mounted) ref.read(conversationsProvider.notifier).refresh();
       }).catchError((_) {});
     });
+    // Fallback-опрос: если realtime недоступен (напр. другой хост), чат всё равно
+    // обновляется. При активном realtime это лишь редкая подстраховка.
+    _poll = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (mounted) ref.read(messagesProvider(_convId).notifier).refresh(_convId).catchError((_) {});
+    });
   }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _input.dispose();
     super.dispose();
   }
@@ -66,6 +75,104 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
       }
+    }
+  }
+
+  static const _sentStatuses = {'accepted', 'sent', 'delivered', 'read'};
+
+  /// Меню действий над сообщением (изменить/удалить — только своё отправленное, §16).
+  void _showMessageActions(Message m) {
+    final canEditDelete = m.isOutbound && !m.isDeleted && _sentStatuses.contains(m.status);
+    if (!canEditDelete && (m.text == null || m.text!.isEmpty)) return;
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (m.text != null && m.text!.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.copy_outlined),
+                title: const Text('Копировать'),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: m.text!));
+                  Navigator.pop(sheet);
+                },
+              ),
+            if (canEditDelete) ...[
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Изменить'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _editMessage(m);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Удалить', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _deleteMessage(m);
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editMessage(Message m) async {
+    final controller = TextEditingController(text: m.text ?? '');
+    final newText = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Изменить сообщение'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 6,
+          decoration: const InputDecoration(hintText: 'Текст сообщения…'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(dialog, controller.text.trim()), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newText == null || newText.isEmpty || newText == m.text) return;
+    try {
+      await ref.read(messagesProvider(_convId).notifier).edit(_convId, m.id, newText);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не изменено: $e')));
+    }
+  }
+
+  Future<void> _deleteMessage(Message m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Удалить сообщение?'),
+        content: const Text('Сообщение будет удалено и у клиента в WhatsApp.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Отмена')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(messagesProvider(_convId).notifier).remove(_convId, m.id);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалено: $e')));
     }
   }
 
@@ -242,9 +349,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               if (showDate) _DateChip(date: m.sortTime),
                               Padding(
                                 padding: EdgeInsets.only(top: prevSameSide ? 1 : 4),
-                                child: _Bubble(
-                                  message: m,
-                                  onRetry: () => ref.read(messagesProvider(_convId).notifier).retry(_convId, m.id),
+                                child: GestureDetector(
+                                  onLongPress: () => _showMessageActions(m),
+                                  child: _Bubble(
+                                    message: m,
+                                    onRetry: () => ref.read(messagesProvider(_convId).notifier).retry(_convId, m.id),
+                                  ),
                                 ),
                               ),
                             ],

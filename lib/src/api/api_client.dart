@@ -115,6 +115,22 @@ class ApiClient {
     _ensureOk(res);
   }
 
+  /// Изменить текст своего отправленного сообщения (§16).
+  Future<void> editMessage(String messageId, String text) async {
+    final res = await http.patch(
+      _uri('/api/messages/$messageId'),
+      headers: _headers,
+      body: jsonEncode({'text': text}),
+    );
+    _ensureOk(res);
+  }
+
+  /// Удалить своё отправленное сообщение (§16).
+  Future<void> deleteMessage(String messageId) async {
+    final res = await http.delete(_uri('/api/messages/$messageId'), headers: _headers);
+    _ensureOk(res);
+  }
+
   /// Короткоживущий signed URL вложения (сервер отдаёт ссылку на наш S3).
   Future<String> attachmentUrl(String attachmentId) async {
     final res = await http.get(_uri('/api/attachments/$attachmentId/url'), headers: _headers);

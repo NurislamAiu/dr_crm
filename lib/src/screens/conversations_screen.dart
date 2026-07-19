@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -10,11 +11,33 @@ import 'search_screen.dart';
 import 'settings_screen.dart';
 
 /// Экран списка диалогов (§18, mobile: отдельный экран списка).
-class ConversationsScreen extends ConsumerWidget {
+class ConversationsScreen extends ConsumerStatefulWidget {
   const ConversationsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ConversationsScreen> createState() => _ConversationsScreenState();
+}
+
+class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    // Fallback-опрос списка (подстраховка, если realtime недоступен).
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) ref.read(conversationsProvider.notifier).refresh().catchError((_) {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final async = ref.watch(conversationsProvider);
     return Scaffold(
       appBar: AppBar(
