@@ -18,7 +18,6 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _input = TextEditingController();
-  final _scroll = ScrollController();
   bool _sending = false;
 
   String get _convId => widget.conversation.id;
@@ -37,7 +36,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void dispose() {
     _input.dispose();
-    _scroll.dispose();
     super.dispose();
   }
 
@@ -48,7 +46,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _input.clear();
     try {
       await ref.read(messagesProvider(_convId).notifier).send(_convId, text);
-      _scrollToBottom();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не отправлено: $e')));
@@ -160,19 +157,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     noteController.dispose();
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(_scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(messagesProvider(_convId));
-    ref.listen(messagesProvider(_convId), (_, _) => _scrollToBottom());
     final brightness = Theme.of(context).brightness;
 
     return Scaffold(
@@ -236,16 +223,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   error: (e, _) => Center(child: Text('Ошибка: $e')),
                   data: (messages) => messages.isEmpty
                     ? const _EmptyChat()
+                    // reverse: true — чат закреплён внизу на последнем сообщении;
+                    // новые приходят снизу, ручной скролл не нужен. Индексируем
+                    // с конца: reverse-индекс 0 = самое новое (низ).
                     : ListView.builder(
-                        controller: _scroll,
+                        reverse: true,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         itemCount: messages.length,
                         itemBuilder: (context, i) {
-                          final m = messages[i];
-                          final showDate = i == 0 || !_sameDay(messages[i - 1].sortTime, m.sortTime);
-                          final prevSameSide = i > 0 &&
+                          final idx = messages.length - 1 - i;
+                          final m = messages[idx];
+                          final showDate = idx == 0 || !_sameDay(messages[idx - 1].sortTime, m.sortTime);
+                          final prevSameSide = idx > 0 &&
                               !showDate &&
-                              messages[i - 1].isOutbound == m.isOutbound;
+                              messages[idx - 1].isOutbound == m.isOutbound;
                           return Column(
                             children: [
                               if (showDate) _DateChip(date: m.sortTime),

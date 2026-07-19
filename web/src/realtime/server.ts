@@ -5,13 +5,20 @@ import { logger } from "@/lib/logger";
 import { REALTIME_CHANNEL, type RealtimeEvent } from "@/lib/realtime/events";
 import { verifyJwt } from "@/lib/auth/jwt";
 
+// Загружаем .env: realtime-сервер не импортирует Prisma (который делает это сам),
+// поэтому AUTH_SECRET/REDIS_URL нужно подтянуть явно. В проде env — из окружения.
+try {
+  process.loadEnvFile();
+} catch {
+  /* .env отсутствует — берём переменные из окружения */
+}
+
 /**
  * Отдельный Socket.IO-сервер (ТЗ §23). Подписан на Redis pub/sub и раздаёт
  * события подключённым клиентам (Flutter-приложение, админка) в комнаты
  * своей организации/диалога. Так каждый получает только события своей орг.
  *
- * Аутентификация: JWT Bearer в handshake (Этап 7 подключит проверку подписи).
- * Сейчас читаем organizationId/userId из auth-payload для формирования комнат.
+ * Аутентификация: JWT в handshake (auth.token), org/user берём из подписанного токена.
  */
 
 const PORT = Number(process.env.REALTIME_PORT ?? 3001);
