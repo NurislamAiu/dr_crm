@@ -68,19 +68,19 @@ class Conversation {
 }
 
 class Attachment {
-  const Attachment({required this.id, required this.kind, this.mimeType, this.status, this.storageKey});
+  const Attachment({required this.id, required this.kind, this.mimeType, this.sizeBytes, this.status});
   final String id;
   final String kind;
   final String? mimeType;
+  final int? sizeBytes;
   final String? status;
-  final String? storageKey;
 
   factory Attachment.fromJson(Map<String, dynamic> j) => Attachment(
         id: j['id'] as String,
         kind: j['kind'] as String? ?? 'unknown',
         mimeType: j['mimeType'] as String?,
+        sizeBytes: (j['sizeBytes'] as num?)?.toInt(),
         status: j['status'] as String?,
-        storageKey: j['storageKey'] as String?,
       );
 }
 

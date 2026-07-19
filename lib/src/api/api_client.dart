@@ -64,6 +64,37 @@ class ApiClient {
     _ensureOk(res);
   }
 
+  /// Короткоживущий signed URL вложения (сервер отдаёт ссылку на наш S3).
+  Future<String> attachmentUrl(String attachmentId) async {
+    final res = await http.get(_uri('/api/attachments/$attachmentId/url'), headers: _headers);
+    _ensureOk(res);
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return data['url'] as String;
+  }
+
+  /// Отправка вложения (multipart). Файл уходит только на наш backend (§14).
+  Future<void> sendMedia(
+    String conversationId, {
+    required List<int> bytes,
+    required String fileName,
+    required String mimeType,
+    String? caption,
+  }) async {
+    final req = http.MultipartRequest(
+      'POST',
+      _uri('/api/conversations/$conversationId/messages/send-media'),
+    );
+    req.headers.addAll({
+      'x-org-id': _config.organizationId,
+      if (_config.userId.isNotEmpty) 'x-user-id': _config.userId,
+    });
+    req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+    if (caption != null && caption.isNotEmpty) req.fields['caption'] = caption;
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    _ensureOk(res);
+  }
+
   void _ensureOk(http.Response res) {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       String message = 'Ошибка ${res.statusCode}';

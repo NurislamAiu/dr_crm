@@ -202,7 +202,7 @@ limiting, Zod-валидация, аудит-лог, шифрование сек
 | 3 | Contact/Conversation/Message, входящие, realtime (WebSocket) | ✅ готово (проверено e2e на Docker) |
 | 4 | **Flutter-приложение**: список диалогов, чат, composer, статусы, unread | ✅ готово (analyze 0, unit-тесты; push/медиа — позже) |
 | 5 | POST /v3/message, crmMessageId, статусы, retry | ✅ готово (проверено e2e с mock Wazzup) |
-| 6 | медиа (S3), voice player, documents, image preview | ⏳ |
+| 6 | медиа (S3): входящие download→MinIO, отправка вложений, просмотр | ✅ готово (e2e); voice-плеер со скоростями — follow-up |
 | 7 | менеджеры, распределение, RBAC, внутренние заметки | ⏳ |
 | 8 | contacts/users sync, мониторинг (админка), тесты, hardening | ⏳ |
 
@@ -245,6 +245,18 @@ send-worker → guard: канал active? → Wazzup POST /v3/message(crmMessage
   → прочие 4xx / канал не active → failed (+ кнопка «Повторить»)
 webhook statuses → sent/delivered/read/failed + MessageStatusHistory
 ```
+
+### Проверено на Этапе 6 (live, MinIO + mock)
+Входящее медиа: `contentUri` → отдельная джоба качает файл (follow redirects) →
+проверка MIME/размера (≤50MB) + sha256 → S3/MinIO (`storageKey`), при ошибке
+`status=failed` с сохранённым `originalContentUri` (§10); webhook не блокируется.
+Отдача — `GET /api/attachments/:id/url` (короткий signed URL, org-проверка);
+скачивание из MinIO подтверждено (HTTP 200, image/png). Исходящее вложение:
+`POST /messages/send-media` (multipart) → S3 → send-worker presigned `contentUri`
+→ `sendMediaMessage` (без text одновременно); подпись — отдельным сообщением
+(2 crmMessageId, §14). Flutter: изображения inline + fullscreen, документы/аудио/
+видео — «Открыть» (signed URL). Отправка вложений из приложения (file picker) и
+voice-плеер со скоростями 1x/1.5x/2x — follow-up (backend готов).
 
 ### Realtime (§23)
 Worker/API публикуют события в Redis pub/sub (`realtime:events`). Отдельный

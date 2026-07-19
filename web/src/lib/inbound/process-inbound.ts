@@ -1,6 +1,7 @@
 import { Prisma, type MessageStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { publishRealtime } from "@/lib/realtime/events";
+import { enqueueMediaDownload } from "@/lib/queue/media-queue";
 import type { NormalizedMessage } from "@/lib/wazzup/normalizer";
 
 /**
@@ -44,7 +45,11 @@ export async function processInboundMessage(
 ): Promise<InboundOutcome> {
   const isInbound = m.direction === "inbound";
 
-  return prisma.$transaction(async (tx) => {
+  // id вложения, скачивание которого нужно поставить в очередь ПОСЛЕ коммита
+  // (чтобы джоба не сослалась на запись из откатившейся транзакции).
+  let mediaAttachmentId: string | null = null;
+
+  const result = await prisma.$transaction(async (tx): Promise<InboundOutcome> => {
     // --- 1. Контакт (уникален по org+channel+chatId, без дублей §11) ---
     const displayName = m.contactName?.trim() || formatPhone(m.chatIdNormalized);
     const contactBefore = await tx.contact.findUnique({
@@ -179,6 +184,21 @@ export async function processInboundMessage(
       throw err;
     }
 
+    // --- 4b. Вложение: если есть contentUri — создать запись и запланировать
+    //         скачивание в S3 (§10). Само скачивание — отдельной джобой. ---
+    if (m.hasContent && m.contentUri) {
+      const att = await tx.messageAttachment.create({
+        data: {
+          messageId: message.id,
+          kind: m.type,
+          originalContentUri: m.contentUri,
+          status: "pending",
+        },
+        select: { id: true },
+      });
+      mediaAttachmentId = att.id;
+    }
+
     // --- 5. Обновить диалог: превью, время, unread (только входящие) ---
     const preview = m.displayHint ?? (m.text ? m.text.slice(0, 120) : "[вложение]");
     let assignedUserId = conversation.assignedUserId;
@@ -278,4 +298,11 @@ export async function processInboundMessage(
       conversationCreated,
     };
   });
+
+  // Скачивание медиа — после коммита транзакции (§10: не блокировать обработку).
+  if (mediaAttachmentId) {
+    await enqueueMediaDownload(mediaAttachmentId);
+  }
+
+  return result;
 }

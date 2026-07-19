@@ -19,6 +19,17 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(body));
   };
 
+  // Тестовый медиафайл для проверки скачивания входящих (Этап 6).
+  if (req.method === "GET" && url.pathname === "/media/sample.png") {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    res.writeHead(200, { "content-type": "image/png", "content-length": String(png.length) });
+    res.end(png);
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/v3/channels") {
     return send(200, [
       { channelId: CHANNEL_ID, transport: "whatsapp", plainId: "77010000000", state: CHANNEL_STATE },

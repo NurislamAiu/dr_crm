@@ -16,13 +16,16 @@ Flutter**, и тонкая веб-админка (настройка webhook, д
 | 2 | webhook endpoint, raw storage, очередь, нормализатор, дедуп | ✅ (e2e на Docker) |
 | 3 | Contact/Conversation/Message, входящие, realtime (Socket.IO) | ✅ (e2e на Docker) |
 | 5 | отправка (POST /v3/message), crmMessageId, статусы, retry | ✅ (e2e с mock) |
-| 4 | Flutter-приложение (чаты/composer/статусы/push) | ⏳ |
-| 6–8 | медиа, RBAC, sync/мониторинг/тесты | ⏳ |
+| 4 | Flutter-приложение (чаты/composer/статусы) | ✅ (analyze+тесты) |
+| 6 | медиа (S3/MinIO): входящие download, отправка вложений, signed URL | ✅ (e2e) |
+| 7–8 | RBAC/JWT, sync/мониторинг/тесты | ⏳ |
 
 API для приложения:
 - `GET /api/conversations`, `GET /api/conversations/:id/messages`
 - `POST /api/conversations/:id/messages/send` (тело: `text`, `replyToMessageId?`)
+- `POST /api/conversations/:id/messages/send-media` (multipart: `file`, `caption?`)
 - `POST /api/messages/:id/retry`
+- `GET /api/attachments/:id/url` (короткий signed URL вложения)
 Realtime: Socket.IO на :3001 (`npm run realtime`), события §23 через Redis pub/sub.
 Локальный mock Wazzup для e2e отправки: `node --import tsx src/scripts/mock-wazzup.ts` (:4000),
 затем запустить worker с `WAZZUP_API_BASE_URL=http://localhost:4000`.

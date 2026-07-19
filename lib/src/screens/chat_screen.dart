@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../models/models.dart';
 import '../state/providers.dart';
+import '../widgets/attachment_view.dart';
 
 /// Экран чата (§18, mobile: отдельный полноэкранный чат).
 class ChatScreen extends ConsumerStatefulWidget {
@@ -112,6 +113,16 @@ class _Bubble extends StatelessWidget {
     final Widget content;
     if (message.isDeleted) {
       content = const Text('Сообщение удалено', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey));
+    } else if (message.attachments.isNotEmpty) {
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AttachmentView(attachment: message.attachments.first),
+          if (message.text != null && message.text!.isNotEmpty)
+            Padding(padding: const EdgeInsets.only(top: 4), child: Text(message.text!)),
+        ],
+      );
     } else if (message.type != 'text' && (message.text == null || message.text!.isEmpty)) {
       content = Text(message.displayHint ?? _typeLabel(message.type),
           style: const TextStyle(fontStyle: FontStyle.italic));

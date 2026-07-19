@@ -45,7 +45,7 @@ export async function GET(
       providerDateTime: true,
       createdAt: true,
       attachments: {
-        select: { id: true, kind: true, mimeType: true, status: true, storageKey: true },
+        select: { id: true, kind: true, mimeType: true, sizeBytes: true, status: true },
       },
     },
   });

@@ -41,6 +41,7 @@ dependencies:
   socket_io_client: ^2.0.3   # realtime (Socket.IO §23)
   intl: ^0.19.0              # форматирование времени
   shared_preferences: ^2.3.3 # хранение настроек (backend URL, dev userId)
+  url_launcher: ^6.3.1       # открытие вложений (документы/аудио/видео) во внешнем приложении
 
 dev_dependencies:
   flutter_test:
