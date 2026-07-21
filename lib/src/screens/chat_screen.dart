@@ -351,18 +351,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         actions: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             child: Material(
-              color: const Color(0xFFE23744),
-              borderRadius: BorderRadius.circular(10),
+              color: Colors.transparent,
               child: InkWell(
                 onTap: _openVip,
-                borderRadius: BorderRadius.circular(10),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Center(
-                    child: Text('VIP',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15, letterSpacing: 0.5)),
+                borderRadius: BorderRadius.circular(22),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFFFF5566), Color(0xFFD11E31)],
+                    ),
+                    borderRadius: BorderRadius.circular(22),
+                    boxShadow: [
+                      BoxShadow(color: const Color(0xFFE23744).withValues(alpha: 0.5), blurRadius: 11, offset: const Offset(0, 4)),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 17),
+                      SizedBox(width: 5),
+                      Text('VIP',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14.5, letterSpacing: 0.8)),
+                    ],
                   ),
                 ),
               ),
