@@ -14,6 +14,118 @@ import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/attachment_view.dart';
 
+// ---- WhatsApp-стиль: цвета, фон-паттерн, пузырь с хвостиком ----
+class _WA {
+  static const bgLight = Color(0xFFEFEAE2);
+  static const bgDark = Color(0xFF0B141A);
+  static const outLight = Color(0xFFD9FDD3); // исходящий пузырь
+  static const outDark = Color(0xFF005C4B);
+  static const inLight = Color(0xFFFFFFFF); // входящий пузырь
+  static const inDark = Color(0xFF1F2C34);
+  static const textLight = Color(0xFF111B21);
+  static const textDark = Color(0xFFE9EDEF);
+  static const metaLight = Color(0xFF667781);
+  static const metaDark = Color(0xFF8696A0);
+  static const readTick = Color(0xFF53BDEB);
+
+  static Color bg(bool d) => d ? bgDark : bgLight;
+  static Color out(bool d) => d ? outDark : outLight;
+  static Color inb(bool d) => d ? inDark : inLight;
+  static Color txt(bool d) => d ? textDark : textLight;
+  static Color meta(bool d) => d ? metaDark : metaLight;
+}
+
+/// Ненавязчивый фоновый паттерн (лёгкие «каракули»), как в WhatsApp.
+class _ChatPatternPainter extends CustomPainter {
+  const _ChatPatternPainter(this.dark);
+  final bool dark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = (dark ? Colors.white : Colors.black).withValues(alpha: dark ? 0.03 : 0.035)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    const step = 64.0;
+    for (double y = 20; y < size.height; y += step) {
+      for (double x = 16; x < size.width; x += step) {
+        final k = ((x + y) ~/ step) % 3;
+        if (k == 0) {
+          canvas.drawCircle(Offset(x, y), 5, paint);
+        } else if (k == 1) {
+          final r = Rect.fromCircle(center: Offset(x, y), radius: 6);
+          canvas.drawArc(r, 0.4, 4.2, false, paint);
+        } else {
+          canvas.drawLine(Offset(x - 5, y + 5), Offset(x + 5, y - 5), paint);
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChatPatternPainter old) => old.dark != dark;
+}
+
+/// Пузырь-сообщение с хвостиком (первый в группе) и мягкой тенью.
+class _BubblePainter extends CustomPainter {
+  const _BubblePainter({required this.color, required this.isOut, required this.tail});
+  final Color color;
+  final bool isOut;
+  final bool tail;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    const r = 12.0, tw = 7.0;
+    final path = Path();
+
+    if (isOut) {
+      final br = w - tw; // правая граница тела
+      path.moveTo(r, 0);
+      if (tail) {
+        path.lineTo(br, 0);
+        path.quadraticBezierTo(br + tw, 0, w, 1);
+        path.quadraticBezierTo(br + 3, 8, br, 10);
+      } else {
+        path.lineTo(br - r, 0);
+        path.quadraticBezierTo(br, 0, br, r);
+      }
+      path.lineTo(br, h - r);
+      path.quadraticBezierTo(br, h, br - r, h);
+      path.lineTo(r, h);
+      path.quadraticBezierTo(0, h, 0, h - r);
+      path.lineTo(0, r);
+      path.quadraticBezierTo(0, 0, r, 0);
+    } else {
+      final bl = tw; // левая граница тела
+      path.moveTo(bl + r, 0);
+      path.lineTo(w - r, 0);
+      path.quadraticBezierTo(w, 0, w, r);
+      path.lineTo(w, h - r);
+      path.quadraticBezierTo(w, h, w - r, h);
+      path.lineTo(bl + r, h);
+      path.quadraticBezierTo(bl, h, bl, h - r);
+      if (tail) {
+        path.lineTo(bl, 10);
+        path.quadraticBezierTo(bl - 3, 8, 0, 1);
+        path.quadraticBezierTo(bl - tw, 0, bl + r, 0);
+      } else {
+        path.lineTo(bl, r);
+        path.quadraticBezierTo(bl, 0, bl + r, 0);
+      }
+    }
+    path.close();
+
+    canvas.drawShadow(path, Colors.black.withValues(alpha: 0.4), 1.2, false);
+    canvas.drawPath(path, Paint()..color = color..isAntiAlias = true);
+  }
+
+  @override
+  bool shouldRepaint(covariant _BubblePainter old) =>
+      old.color != color || old.isOut != isOut || old.tail != tail;
+}
+
 /// Экран чата (§18, mobile: отдельный полноэкранный чат).
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.conversation});
@@ -328,7 +440,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(messagesProvider(_convId));
-    final brightness = Theme.of(context).brightness;
+    final dark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       appBar: AppBar(
@@ -381,8 +493,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ],
       ),
       body: Container(
-        decoration: BoxDecoration(gradient: chatBackground(brightness)),
-        child: SafeArea(
+        color: _WA.bg(dark),
+        child: CustomPaint(
+          painter: _ChatPatternPainter(dark),
+          child: SafeArea(
           child: Column(
             children: [
               Expanded(
@@ -414,6 +528,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   onLongPress: () => _showMessageActions(m),
                                   child: _Bubble(
                                     message: m,
+                                    tail: !prevSameSide,
                                     onRetry: () => ref.read(messagesProvider(_convId).notifier).retry(_convId, m.id),
                                   ),
                                 ),
@@ -437,6 +552,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -508,31 +624,35 @@ class _EmptyChat extends StatelessWidget {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message, required this.onRetry});
+  const _Bubble({required this.message, required this.tail, required this.onRetry});
   final Message message;
+  final bool tail;
   final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    final sem = context.semantic;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final isOut = message.isOutbound;
     final time = DateFormat('HH:mm').format(message.sortTime);
-    final onGrad = isOut; // текст на градиенте — светлый
-    final textColor = isOut ? Colors.white : Theme.of(context).textTheme.bodyMedium!.color;
-    final metaColor = isOut ? Colors.white.withValues(alpha: 0.8) : sem.textSecondary;
+    final textColor = _WA.txt(dark);
+    final metaColor = _WA.meta(dark);
+    final hasMedia = message.attachments.isNotEmpty && !message.isDeleted;
 
     final Widget content;
     if (message.isDeleted) {
-      content = Text('Сообщение удалено',
-          style: TextStyle(fontStyle: FontStyle.italic, color: metaColor));
-    } else if (message.attachments.isNotEmpty) {
+      content = Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.block, size: 15, color: metaColor),
+        const SizedBox(width: 5),
+        Text('Сообщение удалено', style: TextStyle(fontStyle: FontStyle.italic, color: metaColor)),
+      ]);
+    } else if (hasMedia) {
       content = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           AttachmentView(attachment: message.attachments.first),
           if (message.text != null && message.text!.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(top: 4), child: Text(message.text!, style: TextStyle(color: textColor))),
+            Padding(padding: const EdgeInsets.only(top: 4), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15))),
         ],
       );
     } else if (message.type != 'text' && (message.text == null || message.text!.isEmpty)) {
@@ -542,65 +662,47 @@ class _Bubble extends StatelessWidget {
       content = Text(message.text ?? '', style: TextStyle(color: textColor, fontSize: 15, height: 1.3));
     }
 
-    final radius = BorderRadius.only(
-      topLeft: const Radius.circular(18),
-      topRight: const Radius.circular(18),
-      bottomLeft: Radius.circular(isOut ? 18 : 5),
-      bottomRight: Radius.circular(isOut ? 5 : 18),
+    // Метаданные (время/галочки/«изменено») — внизу справа, как в WhatsApp.
+    final meta = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (message.isEdited && !message.isDeleted)
+          Padding(padding: const EdgeInsets.only(right: 4), child: Text('изменено', style: TextStyle(fontSize: 10.5, color: metaColor))),
+        Text(time, style: TextStyle(fontSize: 11, color: metaColor)),
+        if (isOut) ...[const SizedBox(width: 3), _StatusIcon(status: message.status, meta: metaColor)],
+      ],
     );
 
     return Container(
       alignment: isOut ? Alignment.centerRight : Alignment.centerLeft,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Container(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-        decoration: BoxDecoration(
-          gradient: isOut ? brandGradient : null,
-          color: isOut ? null : sem.bubbleIn,
-          borderRadius: radius,
-          boxShadow: [
-            BoxShadow(
-              color: isOut ? AppColors.brand.withValues(alpha: 0.28) : Colors.black.withValues(alpha: 0.06),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            content,
-            const SizedBox(height: 3),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (message.isEdited && !message.isDeleted)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Text('изменено', style: TextStyle(fontSize: 10, color: metaColor)),
-                  ),
-                Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
-                if (isOut) ...[
-                  const SizedBox(width: 4),
-                  _StatusIcon(status: message.status, onGradient: onGrad),
-                ],
-                if (isOut && message.status == 'failed')
-                  GestureDetector(
-                    onTap: onRetry,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: const [
-                        Icon(Icons.refresh, size: 12, color: Colors.white),
-                        SizedBox(width: 2),
-                        Text('Повторить', style: TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
-                      ]),
-                    ),
-                  ),
-              ],
-            ),
-          ],
+      padding: EdgeInsets.only(left: isOut ? 48 : 8, right: isOut ? 8 : 48, top: 1, bottom: 1),
+      child: CustomPaint(
+        painter: _BubblePainter(color: isOut ? _WA.out(dark) : _WA.inb(dark), isOut: isOut, tail: tail),
+        child: Container(
+          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.80),
+          padding: EdgeInsets.only(left: isOut ? 10 : 15, right: isOut ? 15 : 10, top: 7, bottom: 7),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Медиа/текст + мета: если контент «широкий» — мета отдельной строкой.
+              content,
+              const SizedBox(height: 2),
+              if (isOut && message.status == 'failed')
+                GestureDetector(
+                  onTap: onRetry,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.refresh, size: 13, color: Colors.red),
+                    const SizedBox(width: 2),
+                    const Text('Повторить', style: TextStyle(fontSize: 11.5, color: Colors.red, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 8),
+                    meta,
+                  ]),
+                )
+              else
+                Align(alignment: Alignment.centerRight, child: meta),
+            ],
+          ),
         ),
       ),
     );
@@ -619,26 +721,25 @@ class _Bubble extends StatelessWidget {
 }
 
 class _StatusIcon extends StatelessWidget {
-  const _StatusIcon({required this.status, required this.onGradient});
+  const _StatusIcon({required this.status, required this.meta});
   final String status;
-  final bool onGradient;
+  final Color meta;
 
   @override
   Widget build(BuildContext context) {
-    final base = onGradient ? Colors.white.withValues(alpha: 0.85) : Colors.grey;
     switch (status) {
       case 'queued':
       case 'sending':
-        return Icon(Icons.schedule, size: 13, color: base);
+        return Icon(Icons.access_time, size: 14, color: meta);
       case 'accepted':
       case 'sent':
-        return Icon(Icons.check, size: 15, color: base);
+        return Icon(Icons.check, size: 16, color: meta);
       case 'delivered':
-        return Icon(Icons.done_all, size: 15, color: base);
+        return Icon(Icons.done_all, size: 16, color: meta);
       case 'read':
-        return Icon(Icons.done_all, size: 15, color: onGradient ? const Color(0xFF9BE7FF) : Colors.blue);
+        return const Icon(Icons.done_all, size: 16, color: _WA.readTick);
       case 'failed':
-        return Icon(Icons.error_outline, size: 14, color: onGradient ? Colors.white : Colors.red);
+        return const Icon(Icons.error_outline, size: 14, color: Colors.red);
       default:
         return const SizedBox.shrink();
     }
