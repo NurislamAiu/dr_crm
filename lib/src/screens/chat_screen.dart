@@ -13,6 +13,7 @@ import '../models/models.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/attachment_view.dart';
+import 'lead_sheet.dart';
 import 'vip_client_sheet.dart';
 
 /// Экран чата (§18, mobile: отдельный полноэкранный чат).
@@ -227,6 +228,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  void _openLead() {
+    LeadSheet.show(
+      context,
+      name: widget.conversation.contact.name,
+      phone: widget.conversation.contact.phone,
+    );
+  }
+
   static const _sentStatuses = {'accepted', 'sent', 'delivered', 'read'};
 
   /// Меню действий над сообщением (изменить/удалить — только своё отправленное, §16).
@@ -350,39 +359,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _openVip,
-                borderRadius: BorderRadius.circular(22),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFFF5566), Color(0xFFD11E31)],
-                    ),
-                    borderRadius: BorderRadius.circular(22),
-                    boxShadow: [
-                      BoxShadow(color: const Color(0xFFE23744).withValues(alpha: 0.5), blurRadius: 11, offset: const Offset(0, 4)),
-                    ],
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.workspace_premium_rounded, color: Colors.white, size: 17),
-                      SizedBox(width: 5),
-                      Text('VIP',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14.5, letterSpacing: 0.8)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          _ActionPill(
+            label: 'ЛИД',
+            icon: Icons.bolt_rounded,
+            colors: const [Color(0xFF20C9B6), Color(0xFF0E8F82)],
+            glow: const Color(0xFF13B0A0),
+            onTap: _openLead,
           ),
+          _ActionPill(
+            label: 'VIP',
+            icon: Icons.workspace_premium_rounded,
+            colors: const [Color(0xFFFF5566), Color(0xFFD11E31)],
+            glow: const Color(0xFFE23744),
+            onTap: _openVip,
+          ),
+          const SizedBox(width: 10),
         ],
       ),
       body: Container(
@@ -763,6 +754,53 @@ class _StatusIcon extends StatelessWidget {
       default:
         return const SizedBox.shrink();
     }
+  }
+}
+
+/// Градиентная кнопка-пилюля в шапке (ЛИД / VIP).
+class _ActionPill extends StatelessWidget {
+  const _ActionPill({
+    required this.label,
+    required this.icon,
+    required this.colors,
+    required this.glow,
+    required this.onTap,
+  });
+  final String label;
+  final IconData icon;
+  final List<Color> colors;
+  final Color glow;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(24),
+          child: Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 15),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.5), blurRadius: 12, offset: const Offset(0, 4))],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white, size: 18),
+                const SizedBox(width: 5),
+                Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.8)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

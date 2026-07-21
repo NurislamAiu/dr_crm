@@ -1,0 +1,67 @@
+import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
+
+import '../models/lead.dart';
+
+/// Доступ к лидам в Firestore (коллекция `leads`).
+///
+/// Номер лида присваивается атомарно через транзакцию над counters/leads —
+/// так нумерация сквозная и без коллизий даже при параллельных сохранениях.
+class LeadRepository {
+  LeadRepository({FirebaseFirestore? firestore})
+      : _db = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseFirestore _db;
+
+  DocumentReference<Map<String, dynamic>> get _counter => _db.collection('counters').doc('leads');
+
+  /// Предполагаемый следующий номер (для показа в форме до сохранения).
+  Future<int> peekNextNumber() async {
+    try {
+      final snap = await _counter.get();
+      return ((snap.data()?['value'] as num?)?.toInt() ?? 0) + 1;
+    } catch (e) {
+      debugPrint('[LEAD] peekNextNumber ошибка: $e');
+      return 1;
+    }
+  }
+
+  /// Создать лид, присвоив следующий номер атомарно. Возвращает номер.
+  Future<int> create(Lead lead, {required String? createdBy}) async {
+    debugPrint('[LEAD] ── создание лида ──────────────');
+    debugPrint('[LEAD] Firebase apps: ${Firebase.apps.length}');
+    try {
+      final assignedNumber = await _db.runTransaction<int>((tx) async {
+        final snap = await tx.get(_counter);
+        final next = ((snap.data()?['value'] as num?)?.toInt() ?? 0) + 1;
+        tx.set(_counter, {'value': next}, SetOptions(merge: true));
+
+        final leadRef = _db.collection('leads').doc();
+        final data = lead.toCreateMap()
+          ..['leadNumber'] = next
+          ..['createdBy'] = createdBy
+          ..['createdAt'] = FieldValue.serverTimestamp()
+          ..['updatedAt'] = FieldValue.serverTimestamp();
+        tx.set(leadRef, data);
+        return next;
+      });
+      debugPrint('[LEAD] ✅ сохранён лид №$assignedNumber');
+      return assignedNumber;
+    } on FirebaseException catch (e, st) {
+      debugPrint('[LEAD] ❌ FirebaseException code=${e.code} message=${e.message}');
+      if (e.code == 'permission-denied') {
+        debugPrint('[LEAD]    → правила Firestore запрещают запись (нужен test-режим / write).');
+      }
+      debugPrint('$st');
+      rethrow;
+    }
+  }
+
+  /// Поток списка лидов (по номеру, новые сверху).
+  Stream<List<Lead>> watchAll() {
+    return _db.collection('leads').orderBy('leadNumber', descending: true).snapshots().map(
+          (snap) => snap.docs.map(Lead.fromDoc).toList(),
+        );
+  }
+}

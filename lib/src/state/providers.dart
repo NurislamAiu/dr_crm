@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/api_client.dart';
 import '../api/realtime_client.dart';
 import '../config/app_config.dart';
+import '../data/lead_repository.dart';
 import '../data/vip_repository.dart';
 import '../models/models.dart';
 
@@ -14,6 +15,9 @@ final apiClientProvider = Provider<ApiClient>((ref) => ApiClient(ref.watch(appCo
 
 /// Репозиторий VIP-клиентов (Firestore, коллекция clients).
 final vipRepositoryProvider = Provider<VipRepository>((_) => VipRepository());
+
+/// Репозиторий лидов (Firestore, коллекция leads).
+final leadRepositoryProvider = Provider<LeadRepository>((_) => LeadRepository());
 
 final realtimeClientProvider = Provider<RealtimeClient>((ref) {
   final client = RealtimeClient(ref.watch(appConfigProvider));
