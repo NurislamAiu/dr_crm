@@ -92,6 +92,39 @@ function kindForMime(mime: string): string {
   return "document";
 }
 
+/**
+ * Определение MIME по «магическим байтам» содержимого. Приложение иногда шлёт
+ * application/octet-stream (напр. фото без расширения) — тогда тип определяем по
+ * сигнатуре файла, чтобы фото/видео/аудио не превращались в «документ».
+ */
+function sniffMime(bytes: Uint8Array, provided: string): string {
+  const p = (provided || "").toLowerCase();
+  // Доверяем конкретному типу от клиента; уточняем только generic/пустой.
+  if (p && p !== "application/octet-stream" && p !== "binary/octet-stream") return provided;
+
+  const b = bytes;
+  const eq = (offset: number, sig: number[]) => sig.every((v, i) => b[offset + i] === v);
+  const ascii = (offset: number, s: string) => [...s].every((c, i) => b[offset + i] === c.charCodeAt(0));
+
+  if (eq(0, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (eq(0, [0x89, 0x50, 0x4e, 0x47])) return "image/png";
+  if (ascii(0, "GIF8")) return "image/gif";
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image/webp";
+  if (ascii(0, "%PDF")) return "application/pdf";
+  if (eq(0, [0x49, 0x44, 0x33]) || (b[0] === 0xff && ((b[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg"; // ID3 / MPEG audio
+  if (ascii(0, "OggS")) return "audio/ogg";
+  // ISO Base Media (ftyp @ offset 4): heic/mp4/mov
+  if (ascii(4, "ftyp")) {
+    const brand = String.fromCharCode(b[8] ?? 0, b[9] ?? 0, b[10] ?? 0, b[11] ?? 0);
+    if (["heic", "heix", "hevc", "mif1", "heim", "heis"].includes(brand)) return "image/heic";
+    if (brand === "qt  ") return "video/quicktime";
+    return "video/mp4";
+  }
+  return provided || "application/octet-stream";
+}
+
+export { sniffMime as _sniffMimeForTest };
+
 export interface CreateOutboundMediaInput {
   organizationId: string;
   conversationId: string;
@@ -124,7 +157,9 @@ export async function createOutboundMedia(
   });
   if (!conversation) return { ok: false, error: "Диалог не найден", code: "not_found" };
 
-  const kind = kindForMime(input.mimeType);
+  // Тип определяем по содержимому (фикс: фото без расширения не должно уходить документом).
+  const mimeType = sniffMime(input.bytes, input.mimeType);
+  const kind = kindForMime(mimeType);
   const crmMessageId = randomUUID();
   const sha256 = createHash("sha256").update(input.bytes).digest("hex");
 
@@ -147,12 +182,12 @@ export async function createOutboundMedia(
 
   // Сразу кладём файл в S3 (storageKey), send-worker сгенерит presigned contentUri.
   const key = `media/${input.organizationId}/out/${message.id}`;
-  await putObject(key, input.bytes, input.mimeType);
+  await putObject(key, input.bytes, mimeType);
   await prisma.messageAttachment.create({
     data: {
       messageId: message.id,
       kind,
-      mimeType: input.mimeType,
+      mimeType: mimeType,
       sizeBytes: input.bytes.byteLength,
       sha256,
       storageKey: key,
