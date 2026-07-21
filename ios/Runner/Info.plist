@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Доступ к фото нужен, чтобы отправлять изображения клиентам в чат.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Доступ к камере нужен, чтобы снимать и отправлять фото клиентам.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Доступ к микрофону нужен для записи голосовых сообщений.</string>
 </dict>
 </plist>

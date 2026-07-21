@@ -110,6 +110,18 @@ class MessagesNotifier extends FamilyAsyncNotifier<List<Message>, String> {
     await refresh(conversationId);
   }
 
+  Future<void> sendMedia(
+    String conversationId, {
+    required List<int> bytes,
+    required String fileName,
+    required String mimeType,
+    String? caption,
+  }) async {
+    await ref.read(apiClientProvider).sendMedia(conversationId,
+        bytes: bytes, fileName: fileName, mimeType: mimeType, caption: caption);
+    await refresh(conversationId);
+  }
+
   Future<void> retry(String conversationId, String messageId) async {
     await ref.read(apiClientProvider).retryMessage(messageId);
     await refresh(conversationId);

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../models/models.dart';
 import '../state/providers.dart';
@@ -63,6 +65,78 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Выбор и отправка фото/файла (§14). Backend уже поддерживает вложения.
+  Future<void> _pickAndSendMedia() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(leading: const Icon(Icons.photo_library_outlined), title: const Text('Фото из галереи'), onTap: () => Navigator.pop(sheet, 'gallery')),
+            ListTile(leading: const Icon(Icons.photo_camera_outlined), title: const Text('Камера'), onTap: () => Navigator.pop(sheet, 'camera')),
+            ListTile(leading: const Icon(Icons.attach_file), title: const Text('Файл / документ'), onTap: () => Navigator.pop(sheet, 'file')),
+          ],
+        ),
+      ),
+    );
+    if (choice == null) return;
+
+    List<int>? bytes;
+    String? name;
+    String? mime;
+    try {
+      if (choice == 'gallery' || choice == 'camera') {
+        final x = await ImagePicker().pickImage(
+          source: choice == 'camera' ? ImageSource.camera : ImageSource.gallery,
+          imageQuality: 85,
+        );
+        if (x == null) return;
+        bytes = await x.readAsBytes();
+        name = x.name;
+        mime = x.mimeType ?? _mimeFromName(x.name);
+      } else {
+        final res = await FilePicker.platform.pickFiles(withData: true);
+        final f = res?.files.isNotEmpty == true ? res!.files.first : null;
+        if (f == null || f.bytes == null) return;
+        bytes = f.bytes!;
+        name = f.name;
+        mime = _mimeFromName(f.name);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось выбрать файл: $e')));
+      return;
+    }
+
+    setState(() => _sending = true);
+    try {
+      await ref.read(messagesProvider(_convId).notifier).sendMedia(
+            _convId,
+            bytes: bytes,
+            fileName: name,
+            mimeType: mime,
+          );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не отправлено: $e')));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  String _mimeFromName(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    return const {
+      'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif',
+      'webp': 'image/webp', 'heic': 'image/heic', 'mp4': 'video/mp4', 'mov': 'video/quicktime',
+      'pdf': 'application/pdf', 'doc': 'application/msword',
+      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'xls': 'application/vnd.ms-excel',
+      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'mp3': 'audio/mpeg', 'ogg': 'audio/ogg', 'm4a': 'audio/mp4', 'txt': 'text/plain',
+    }[ext] ?? 'application/octet-stream';
   }
 
   Future<void> _onAction(String action) async {
@@ -271,7 +345,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                 ),
               ),
-              _Composer(controller: _input, sending: _sending, onSend: _send),
+              _Composer(controller: _input, sending: _sending, onSend: _send, onAttach: _pickAndSendMedia),
             ],
           ),
         ),
@@ -483,10 +557,11 @@ class _StatusIcon extends StatelessWidget {
 }
 
 class _Composer extends StatelessWidget {
-  const _Composer({required this.controller, required this.sending, required this.onSend});
+  const _Composer({required this.controller, required this.sending, required this.onSend, required this.onAttach});
   final TextEditingController controller;
   final bool sending;
   final VoidCallback onSend;
+  final VoidCallback onAttach;
 
   @override
   Widget build(BuildContext context) {
@@ -496,10 +571,15 @@ class _Composer extends StatelessWidget {
         color: surface,
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, -2))],
       ),
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+      padding: const EdgeInsets.fromLTRB(6, 8, 12, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          IconButton(
+            icon: Icon(Icons.add_circle_outline, color: context.semantic.textSecondary),
+            tooltip: 'Прикрепить',
+            onPressed: sending ? null : onAttach,
+          ),
           Expanded(
             child: TextField(
               controller: controller,
