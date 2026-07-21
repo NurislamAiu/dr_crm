@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getAuthContext, unauthorized } from "@/lib/auth/context";
 import { getObjectBytes } from "@/lib/storage/s3";
+import { verifyContentToken } from "@/lib/media/content-link";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,12 +17,24 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const ctx = getAuthContext(req);
-  if (!ctx) return unauthorized();
   const { id } = await params;
 
+  // Два способа доступа: Bearer от приложения ИЛИ подписанная публичная ссылка
+  // (?exp=&sig=) — её отдаём Wazzup, который не умеет Bearer (§14).
+  const ctx = getAuthContext(req);
+  let orgScope: string | undefined;
+  if (ctx) {
+    orgScope = ctx.organizationId;
+  } else {
+    const url = new URL(req.url);
+    const exp = Number(url.searchParams.get("exp"));
+    const sig = url.searchParams.get("sig") ?? "";
+    if (!verifyContentToken(id, exp, sig)) return unauthorized();
+    // подпись доказывает авторизацию на этот id — организацию не ограничиваем
+  }
+
   const att = await prisma.messageAttachment.findFirst({
-    where: { id, message: { organizationId: ctx.organizationId } },
+    where: orgScope ? { id, message: { organizationId: orgScope } } : { id },
     select: { storageKey: true, mimeType: true, status: true },
   });
   if (!att) return NextResponse.json({ error: "not found" }, { status: 404 });

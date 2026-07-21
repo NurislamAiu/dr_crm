@@ -4,7 +4,7 @@ import { publishRealtime } from "@/lib/realtime/events";
 import { getWazzupClient } from "@/lib/wazzup/factory";
 import { resolveSendableChannel } from "@/lib/wazzup/channel-guard";
 import { WazzupApiError, WazzupTimeoutError } from "@/lib/wazzup/errors";
-import { signedGetUrl } from "@/lib/storage/s3";
+import { publicContentUri } from "@/lib/media/content-link";
 import type { WazzupApiClient } from "@/lib/wazzup/client";
 
 /**
@@ -47,7 +47,7 @@ export async function processSend(
       id: true, organizationId: true, conversationId: true, channelId: true, chatType: true,
       chatId: true, text: true, crmMessageId: true, externalMessageId: true, status: true,
       authorId: true, replyToMessageId: true,
-      attachments: { where: { status: "stored" }, select: { storageKey: true }, take: 1 },
+      attachments: { where: { status: "stored" }, select: { id: true }, take: 1 },
     },
   });
   if (!message || !message.crmMessageId) return "skipped";
@@ -83,7 +83,7 @@ export async function processSend(
   }
 
   try {
-    const attachmentKey = message.attachments[0]?.storageKey ?? null;
+    const attachmentId = message.attachments[0]?.id ?? null;
     const common = {
       channelId: message.channelId,
       chatId: message.chatId,
@@ -94,10 +94,11 @@ export async function processSend(
     };
 
     let res;
-    if (attachmentKey) {
-      // Медиа: presigned URL нашего S3 как contentUri (§14, без text одновременно).
-      // Wazzup скачивает сразу, поэтому TTL можно короткий.
-      const contentUri = await signedGetUrl(attachmentKey, 600);
+    if (attachmentId) {
+      // Медиа: публичная подписанная ссылка через APP_URL (§14, без text одновременно).
+      // Wazzup скачивает по contentUri из интернета — MinIO ему недоступен, поэтому
+      // отдаём наш публичный /content?exp=&sig=.
+      const contentUri = publicContentUri(attachmentId);
       res = await client.sendMediaMessage({ ...common, contentUri });
     } else {
       const base = { ...common, text: message.text ?? "" };
