@@ -7,6 +7,7 @@ import '../models/models.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'chat_screen.dart';
+import 'leads_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
 
@@ -62,6 +63,9 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
                 onSettings: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const SettingsScreen()),
                 ),
+                onLeads: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const LeadsScreen()),
+                ),
               ),
               Expanded(
                 child: async.when(
@@ -92,9 +96,10 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
 
 /// Верхняя панель списка: заголовок, настройки, встроенная строка поиска.
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.onSearch, required this.onSettings});
+  const _TopBar({required this.onSearch, required this.onSettings, required this.onLeads});
   final VoidCallback onSearch;
   final VoidCallback onSettings;
+  final VoidCallback onLeads;
 
   @override
   Widget build(BuildContext context) {
@@ -110,6 +115,16 @@ class _TopBar extends StatelessWidget {
               const Expanded(
                 child: Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
               ),
+              IconButton.filledTonal(
+                style: IconButton.styleFrom(
+                  backgroundColor: AppColors.brand.withValues(alpha: 0.12),
+                  foregroundColor: AppColors.brand,
+                ),
+                icon: const Icon(Icons.bolt_rounded),
+                tooltip: 'Лиды',
+                onPressed: onLeads,
+              ),
+              const SizedBox(width: 8),
               IconButton.filledTonal(
                 icon: const Icon(Icons.settings_outlined),
                 onPressed: onSettings,
