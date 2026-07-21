@@ -553,7 +553,7 @@ class _Bubble extends StatelessWidget {
       ]);
     } else if (failed) {
       inner = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        if (hasMedia) AttachmentView(attachment: message.attachments.first),
+        if (hasMedia) AttachmentView(attachment: message.attachments.first, onGradient: isOut),
         if (message.text != null && message.text!.isNotEmpty)
           Padding(padding: EdgeInsets.only(top: hasMedia ? 6 : 0), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15.5))),
         const SizedBox(height: 5),
@@ -570,7 +570,7 @@ class _Bubble extends StatelessWidget {
       ]);
     } else if (hasMedia) {
       inner = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        AttachmentView(attachment: message.attachments.first),
+        AttachmentView(attachment: message.attachments.first, onGradient: isOut),
         Padding(
           padding: const EdgeInsets.fromLTRB(6, 5, 4, 1),
           child: (message.text != null && message.text!.isNotEmpty)
