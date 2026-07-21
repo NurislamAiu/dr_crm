@@ -113,19 +113,20 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
       _ => Icons.description_outlined,
     };
     final size = a.sizeBytes != null ? _humanSize(a.sizeBytes!) : '';
+    final subtitle = [size, 'Нажмите, чтобы открыть'].where((e) => e.isNotEmpty).join(' · ');
     return InkWell(
       onTap: _openExternally,
       borderRadius: BorderRadius.circular(14),
       child: SizedBox(
-        width: 230,
+        width: 232,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           child: Row(children: [
             Container(
-              width: 44,
-              height: 44,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(color: iconBg, borderRadius: BorderRadius.circular(12)),
-              child: Icon(icon, size: 24, color: fg),
+              child: Icon(icon, size: 22, color: fg),
             ),
             const SizedBox(width: 11),
             Expanded(
@@ -135,8 +136,7 @@ class _AttachmentViewState extends ConsumerState<AttachmentView> {
                 children: [
                   Text(_kindLabel(a.kind), style: TextStyle(color: title, fontWeight: FontWeight.w600, fontSize: 14.5), maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 2),
-                  Text([a.mimeType, size].where((e) => e != null && e.isNotEmpty).join(' · '),
-                      style: TextStyle(fontSize: 11.5, color: sub), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(subtitle, style: TextStyle(fontSize: 11, color: sub), maxLines: 1, overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),

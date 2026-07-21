@@ -413,15 +413,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           final prevSameSide = idx > 0 &&
                               !showDate &&
                               messages[idx - 1].isOutbound == m.isOutbound;
+                          // Аватар показываем у последнего сообщения в группе (нижнего).
+                          final nextDiffSide = idx == messages.length - 1 ||
+                              messages[idx + 1].isOutbound != m.isOutbound ||
+                              !_sameDay(m.sortTime, messages[idx + 1].sortTime);
                           return Column(
                             children: [
                               if (showDate) _DateChip(date: m.sortTime),
                               Padding(
-                                padding: EdgeInsets.only(top: prevSameSide ? 1 : 4),
+                                padding: EdgeInsets.only(top: prevSameSide ? 2 : 8),
                                 child: GestureDetector(
                                   onLongPress: () => _showMessageActions(m),
                                   child: _Bubble(
                                     message: m,
+                                    showAvatar: nextDiffSide,
+                                    flagSeed: widget.conversation.contact.chatId ?? widget.conversation.contact.name,
                                     onRetry: () => ref.read(messagesProvider(_convId).notifier).retry(_convId, m.id),
                                   ),
                                 ),
@@ -516,75 +522,89 @@ class _EmptyChat extends StatelessWidget {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message, required this.onRetry});
+  const _Bubble({
+    required this.message,
+    required this.showAvatar,
+    required this.flagSeed,
+    required this.onRetry,
+  });
   final Message message;
+  final bool showAvatar;
+  final String flagSeed;
   final VoidCallback onRetry;
+
+  static const double _avatarSize = 30;
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final isOut = message.isOutbound;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+
+    final avatar = _avatar(isOut);
+    final bubble = Flexible(child: _bubble(context, dark, isOut));
+    final side = _sideMeta(context, isOut, dark);
+
+    final row = isOut
+        ? [side, const SizedBox(width: 6), bubble, const SizedBox(width: 6), avatar]
+        : [avatar, const SizedBox(width: 6), bubble, const SizedBox(width: 6), side];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+      child: Row(
+        mainAxisAlignment: isOut ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: row,
+      ),
+    );
+  }
+
+  // --- Аватар сбоку (нижнее сообщение группы) ---
+  Widget _avatar(bool isOut) {
+    if (!showAvatar) return const SizedBox(width: _avatarSize);
+    return Container(
+      width: _avatarSize,
+      height: _avatarSize,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: isOut ? brandGradient : null,
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.10), blurRadius: 4, offset: const Offset(0, 1))],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: isOut
+          ? const Icon(Icons.support_agent_rounded, size: 17, color: Colors.white)
+          : Image.asset(flagAsset(flagSeed), fit: BoxFit.cover),
+    );
+  }
+
+  // --- Время + галочки снаружи пузыря ---
+  Widget _sideMeta(BuildContext context, bool isOut, bool dark) {
+    final c = context.semantic.textSecondary.withValues(alpha: 0.8);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (message.isEdited && !message.isDeleted)
+            Padding(padding: const EdgeInsets.only(right: 3), child: Text('изм.', style: TextStyle(fontSize: 10, color: c))),
+          Text(DateFormat('HH:mm').format(message.sortTime), style: TextStyle(fontSize: 10.5, color: c, height: 1)),
+          if (isOut) ...[const SizedBox(width: 3), _StatusIcon(status: message.status, onGradient: false)],
+        ],
+      ),
+    );
+  }
+
+  // --- Тело пузыря ---
+  Widget _bubble(BuildContext context, bool dark, bool isOut) {
+    final w = MediaQuery.of(context).size.width;
+    final maxW = w * 0.72;
     final hasMedia = message.attachments.isNotEmpty && !message.isDeleted;
     final failed = isOut && message.status == 'failed';
-    final w = MediaQuery.of(context).size.width;
+    final hasCaption = message.text != null && message.text!.isNotEmpty;
 
+    final bubbleColor = isOut ? AppColors.brand : (dark ? const Color(0xFF1C262C) : Colors.white);
     final textColor = isOut ? Colors.white : (dark ? const Color(0xFFE9EEF0) : const Color(0xFF0E1B22));
-    final metaColor = isOut ? Colors.white.withValues(alpha: 0.9) : context.semantic.textSecondary;
 
-    // Мета: «изменено» · время · галочки
-    final metaRow = Row(mainAxisSize: MainAxisSize.min, children: [
-      if (message.isEdited && !message.isDeleted)
-        Padding(padding: const EdgeInsets.only(right: 4), child: Text('изм.', style: TextStyle(fontSize: 10.5, color: metaColor))),
-      Text(DateFormat('HH:mm').format(message.sortTime), style: TextStyle(fontSize: 11, color: metaColor, height: 1)),
-      if (isOut) ...[const SizedBox(width: 3), _StatusIcon(status: message.status, onGradient: true)],
-    ]);
-    // место под мету в конце последней строки (чтобы время не наезжало на текст)
-    double reserve = 36 + (isOut ? 20 : 0) + (message.isEdited && !message.isDeleted ? 28 : 0);
-
-    // Тело пузыря
-    final Widget inner;
-    if (message.isDeleted) {
-      inner = Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.do_not_disturb_alt, size: 16, color: metaColor),
-        const SizedBox(width: 6),
-        Flexible(child: Text('Сообщение удалено', style: TextStyle(fontStyle: FontStyle.italic, color: metaColor, fontSize: 14.5))),
-        const SizedBox(width: 10),
-        metaRow,
-      ]);
-    } else if (failed) {
-      inner = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        if (hasMedia) AttachmentView(attachment: message.attachments.first, onGradient: isOut),
-        if (message.text != null && message.text!.isNotEmpty)
-          Padding(padding: EdgeInsets.only(top: hasMedia ? 6 : 0), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15.5))),
-        const SizedBox(height: 5),
-        GestureDetector(
-          onTap: onRetry,
-          child: Row(children: [
-            const Icon(Icons.refresh_rounded, size: 15, color: Colors.white),
-            const SizedBox(width: 4),
-            const Text('Не отправлено · Повторить', style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w600)),
-            const Spacer(),
-            metaRow,
-          ]),
-        ),
-      ]);
-    } else if (hasMedia) {
-      inner = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        AttachmentView(attachment: message.attachments.first, onGradient: isOut),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(6, 5, 4, 1),
-          child: (message.text != null && message.text!.isNotEmpty)
-              ? _textMeta(message.text!, textColor, metaRow, reserve)
-              : Align(alignment: Alignment.centerRight, child: metaRow),
-        ),
-      ]);
-    } else if (message.type != 'text' && (message.text == null || message.text!.isEmpty)) {
-      inner = _textMeta(message.displayHint ?? _typeLabel(message.type), textColor, metaRow, reserve, italic: true);
-    } else {
-      inner = _textMeta(message.text ?? '', textColor, metaRow, reserve);
-    }
-
-    const rBig = Radius.circular(20);
+    const rBig = Radius.circular(18);
     const rSmall = Radius.circular(6);
     final radius = BorderRadius.only(
       topLeft: rBig,
@@ -593,45 +613,113 @@ class _Bubble extends StatelessWidget {
       bottomRight: isOut ? rSmall : rBig,
     );
 
-    return Padding(
-      padding: EdgeInsets.only(left: isOut ? 56 : 12, right: isOut ? 12 : 56, top: 1.5, bottom: 1.5),
-      child: Align(
-        alignment: isOut ? Alignment.centerRight : Alignment.centerLeft,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: w * 0.80),
-          child: Container(
-            padding: hasMedia ? const EdgeInsets.all(4) : const EdgeInsets.fromLTRB(13, 8, 11, 7),
-            decoration: BoxDecoration(
-              gradient: isOut ? brandGradient : null,
-              color: isOut ? null : (dark ? const Color(0xFF1C262C) : Colors.white),
-              borderRadius: radius,
-              border: (!isOut && dark) ? Border.all(color: Colors.white.withValues(alpha: 0.05)) : null,
-              boxShadow: [
-                BoxShadow(
-                  color: isOut ? AppColors.brand.withValues(alpha: 0.28) : Colors.black.withValues(alpha: dark ? 0.30 : 0.07),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
+    BoxDecoration deco({bool shadowOnly = false}) => BoxDecoration(
+          color: shadowOnly ? null : bubbleColor,
+          borderRadius: radius,
+          border: (!isOut && dark && !shadowOnly) ? Border.all(color: Colors.white.withValues(alpha: 0.05)) : null,
+          boxShadow: [
+            BoxShadow(
+              color: isOut ? AppColors.brand.withValues(alpha: 0.22) : Colors.black.withValues(alpha: dark ? 0.28 : 0.06),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
             ),
-            child: inner,
-          ),
+          ],
+        );
+
+    final att = hasMedia ? message.attachments.first : null;
+    final isImage = att != null && att.kind == 'image' && att.status == 'stored';
+
+    // Фото без подписи: изображение = пузырь (во всю ширину, скруглённое).
+    if (isImage && !hasCaption && !failed) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxW),
+        child: Container(
+          decoration: deco(shadowOnly: true),
+          child: ClipRRect(borderRadius: radius, child: AttachmentView(attachment: att, onGradient: isOut)),
         ),
+      );
+    }
+
+    // Медиа с подписью / фото+текст: изображение сверху, подпись под ним.
+    if (isImage) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxW),
+        child: Container(
+          decoration: deco(),
+          padding: const EdgeInsets.all(4),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            ClipRRect(borderRadius: BorderRadius.circular(14), child: AttachmentView(attachment: att, onGradient: isOut)),
+            if (hasCaption)
+              Padding(padding: const EdgeInsets.fromLTRB(8, 7, 8, 3), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.3))),
+            if (failed) _retryRow(isOut),
+          ]),
+        ),
+      );
+    }
+
+    // Голосовой / видео / файл: компактный пузырь по размеру карточки.
+    if (att != null) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxW),
+        child: Container(
+          decoration: deco(),
+          padding: const EdgeInsets.all(5),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            AttachmentView(attachment: att, onGradient: isOut),
+            if (hasCaption)
+              Padding(padding: const EdgeInsets.fromLTRB(6, 6, 6, 2), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.3))),
+            if (failed) _retryRow(isOut),
+          ]),
+        ),
+      );
+    }
+
+    // Удалённое сообщение.
+    if (message.isDeleted) {
+      final c = textColor.withValues(alpha: 0.65);
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxW),
+        child: Container(
+          decoration: deco(),
+          padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.do_not_disturb_alt, size: 15, color: c),
+            const SizedBox(width: 6),
+            Flexible(child: Text('Сообщение удалено', style: TextStyle(fontStyle: FontStyle.italic, color: c, fontSize: 14.5))),
+          ]),
+        ),
+      );
+    }
+
+    // Текст (или нетекстовый тип-подсказка).
+    final bool typeHint = message.type != 'text' && !hasCaption;
+    final String body = typeHint ? (message.displayHint ?? _typeLabel(message.type)) : (message.text ?? '');
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxW),
+      child: Container(
+        decoration: deco(),
+        padding: const EdgeInsets.fromLTRB(13, 9, 13, 9),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(body, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.32, letterSpacing: -0.1, fontStyle: typeHint ? FontStyle.italic : null)),
+          if (failed) _retryRow(isOut),
+        ]),
       ),
     );
   }
 
-  /// Текст с «встроенным» временем в правом нижнем углу (как в iMessage).
-  Widget _textMeta(String text, Color color, Widget meta, double reserve, {bool italic = false}) {
-    return Stack(children: [
-      Text.rich(
-        TextSpan(children: [
-          TextSpan(text: text, style: TextStyle(color: color, fontSize: 15.5, height: 1.32, fontStyle: italic ? FontStyle.italic : null, letterSpacing: -0.1)),
-          WidgetSpan(child: SizedBox(width: reserve, height: 1)),
+  Widget _retryRow(bool isOut) {
+    final c = isOut ? Colors.white : Colors.red;
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: GestureDetector(
+        onTap: onRetry,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.refresh_rounded, size: 15, color: c),
+          const SizedBox(width: 4),
+          Text('Не отправлено · Повторить', style: TextStyle(fontSize: 12, color: c, fontWeight: FontWeight.w600)),
         ]),
       ),
-      Positioned(right: 0, bottom: 0, child: meta),
-    ]);
+    );
   }
 
   String _typeLabel(String type) => switch (type) {
