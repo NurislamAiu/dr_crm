@@ -335,7 +335,14 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
         final t = await showTimePicker(
           context: context,
           initialTime: value ?? TimeOfDay.now(),
-          builder: (ctx, child) => Theme(data: _pickerTheme(ctx), child: child!),
+          builder: (ctx, child) => Theme(
+            data: _pickerTheme(ctx),
+            // Принудительно 24-часовой формат независимо от локали устройства.
+            child: MediaQuery(
+              data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+              child: child!,
+            ),
+          ),
         );
         if (t != null) onPick(t);
       },
