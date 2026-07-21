@@ -524,48 +524,68 @@ class _Bubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final isOut = message.isOutbound;
-    final time = DateFormat('HH:mm').format(message.sortTime);
     final hasMedia = message.attachments.isNotEmpty && !message.isDeleted;
+    final failed = isOut && message.status == 'failed';
+    final w = MediaQuery.of(context).size.width;
 
-    final textColor = isOut ? Colors.white : (dark ? const Color(0xFFE7ECEF) : const Color(0xFF0E1B22));
-    final metaColor = isOut ? Colors.white.withValues(alpha: 0.82) : context.semantic.textSecondary;
+    final textColor = isOut ? Colors.white : (dark ? const Color(0xFFE9EEF0) : const Color(0xFF0E1B22));
+    final metaColor = isOut ? Colors.white.withValues(alpha: 0.9) : context.semantic.textSecondary;
 
-    final Widget content;
+    // Мета: «изменено» · время · галочки
+    final metaRow = Row(mainAxisSize: MainAxisSize.min, children: [
+      if (message.isEdited && !message.isDeleted)
+        Padding(padding: const EdgeInsets.only(right: 4), child: Text('изм.', style: TextStyle(fontSize: 10.5, color: metaColor))),
+      Text(DateFormat('HH:mm').format(message.sortTime), style: TextStyle(fontSize: 11, color: metaColor, height: 1)),
+      if (isOut) ...[const SizedBox(width: 3), _StatusIcon(status: message.status, onGradient: true)],
+    ]);
+    // место под мету в конце последней строки (чтобы время не наезжало на текст)
+    double reserve = 36 + (isOut ? 20 : 0) + (message.isEdited && !message.isDeleted ? 28 : 0);
+
+    // Тело пузыря
+    final Widget inner;
     if (message.isDeleted) {
-      content = Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.do_not_disturb_alt, size: 15, color: metaColor),
-        const SizedBox(width: 5),
-        Text('Сообщение удалено', style: TextStyle(fontStyle: FontStyle.italic, color: metaColor)),
+      inner = Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.do_not_disturb_alt, size: 16, color: metaColor),
+        const SizedBox(width: 6),
+        Flexible(child: Text('Сообщение удалено', style: TextStyle(fontStyle: FontStyle.italic, color: metaColor, fontSize: 14.5))),
+        const SizedBox(width: 10),
+        metaRow,
+      ]);
+    } else if (failed) {
+      inner = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        if (hasMedia) AttachmentView(attachment: message.attachments.first),
+        if (message.text != null && message.text!.isNotEmpty)
+          Padding(padding: EdgeInsets.only(top: hasMedia ? 6 : 0), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15.5))),
+        const SizedBox(height: 5),
+        GestureDetector(
+          onTap: onRetry,
+          child: Row(children: [
+            const Icon(Icons.refresh_rounded, size: 15, color: Colors.white),
+            const SizedBox(width: 4),
+            const Text('Не отправлено · Повторить', style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w600)),
+            const Spacer(),
+            metaRow,
+          ]),
+        ),
       ]);
     } else if (hasMedia) {
-      content = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AttachmentView(attachment: message.attachments.first),
-          if (message.text != null && message.text!.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(top: 5), child: Text(message.text!, style: TextStyle(color: textColor, fontSize: 15.5))),
-        ],
-      );
+      inner = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        AttachmentView(attachment: message.attachments.first),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 5, 4, 1),
+          child: (message.text != null && message.text!.isNotEmpty)
+              ? _textMeta(message.text!, textColor, metaRow, reserve)
+              : Align(alignment: Alignment.centerRight, child: metaRow),
+        ),
+      ]);
     } else if (message.type != 'text' && (message.text == null || message.text!.isEmpty)) {
-      content = Text(message.displayHint ?? _typeLabel(message.type),
-          style: TextStyle(fontStyle: FontStyle.italic, color: textColor));
+      inner = _textMeta(message.displayHint ?? _typeLabel(message.type), textColor, metaRow, reserve, italic: true);
     } else {
-      content = Text(message.text ?? '', style: TextStyle(color: textColor, fontSize: 15.5, height: 1.32, letterSpacing: -0.1));
+      inner = _textMeta(message.text ?? '', textColor, metaRow, reserve);
     }
 
-    final meta = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (message.isEdited && !message.isDeleted)
-          Padding(padding: const EdgeInsets.only(right: 5), child: Text('изменено', style: TextStyle(fontSize: 10.5, color: metaColor, fontStyle: FontStyle.italic))),
-        Text(time, style: TextStyle(fontSize: 11, color: metaColor)),
-        if (isOut) ...[const SizedBox(width: 4), _StatusIcon(status: message.status, onGradient: true)],
-      ],
-    );
-
-    const rBig = Radius.circular(22);
-    const rSmall = Radius.circular(7);
+    const rBig = Radius.circular(20);
+    const rSmall = Radius.circular(6);
     final radius = BorderRadius.only(
       topLeft: rBig,
       topRight: rBig,
@@ -574,55 +594,44 @@ class _Bubble extends StatelessWidget {
     );
 
     return Padding(
-      padding: EdgeInsets.only(left: isOut ? 60 : 14, right: isOut ? 14 : 60, top: 1.5, bottom: 1.5),
+      padding: EdgeInsets.only(left: isOut ? 56 : 12, right: isOut ? 12 : 56, top: 1.5, bottom: 1.5),
       child: Align(
         alignment: isOut ? Alignment.centerRight : Alignment.centerLeft,
-        child: Container(
-          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-          padding: hasMedia
-              ? const EdgeInsets.all(5)
-              : const EdgeInsets.fromLTRB(14, 9, 12, 8),
-          decoration: BoxDecoration(
-            gradient: isOut ? brandGradient : null,
-            color: isOut ? null : (dark ? const Color(0xFF1B252B) : Colors.white),
-            borderRadius: radius,
-            border: (!isOut && dark) ? Border.all(color: Colors.white.withValues(alpha: 0.05)) : null,
-            boxShadow: [
-              BoxShadow(
-                color: isOut ? AppColors.brand.withValues(alpha: 0.30) : Colors.black.withValues(alpha: dark ? 0.28 : 0.06),
-                blurRadius: 14,
-                offset: const Offset(0, 5),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: hasMedia ? const EdgeInsets.fromLTRB(9, 4, 7, 0) : EdgeInsets.zero,
-                child: content,
-              ),
-              Padding(
-                padding: hasMedia ? const EdgeInsets.fromLTRB(9, 3, 7, 3) : const EdgeInsets.only(top: 3),
-                child: (isOut && message.status == 'failed')
-                    ? GestureDetector(
-                        onTap: onRetry,
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.refresh, size: 13, color: isOut ? Colors.white : Colors.red),
-                          const SizedBox(width: 3),
-                          Text('Повторить', style: TextStyle(fontSize: 11.5, color: isOut ? Colors.white : Colors.red, fontWeight: FontWeight.w600)),
-                          const Spacer(),
-                          meta,
-                        ]),
-                      )
-                    : Align(alignment: Alignment.centerRight, child: meta),
-              ),
-            ],
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: w * 0.80),
+          child: Container(
+            padding: hasMedia ? const EdgeInsets.all(4) : const EdgeInsets.fromLTRB(13, 8, 11, 7),
+            decoration: BoxDecoration(
+              gradient: isOut ? brandGradient : null,
+              color: isOut ? null : (dark ? const Color(0xFF1C262C) : Colors.white),
+              borderRadius: radius,
+              border: (!isOut && dark) ? Border.all(color: Colors.white.withValues(alpha: 0.05)) : null,
+              boxShadow: [
+                BoxShadow(
+                  color: isOut ? AppColors.brand.withValues(alpha: 0.28) : Colors.black.withValues(alpha: dark ? 0.30 : 0.07),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: inner,
           ),
         ),
       ),
     );
+  }
+
+  /// Текст с «встроенным» временем в правом нижнем углу (как в iMessage).
+  Widget _textMeta(String text, Color color, Widget meta, double reserve, {bool italic = false}) {
+    return Stack(children: [
+      Text.rich(
+        TextSpan(children: [
+          TextSpan(text: text, style: TextStyle(color: color, fontSize: 15.5, height: 1.32, fontStyle: italic ? FontStyle.italic : null, letterSpacing: -0.1)),
+          WidgetSpan(child: SizedBox(width: reserve, height: 1)),
+        ]),
+      ),
+      Positioned(right: 0, bottom: 0, child: meta),
+    ]);
   }
 
   String _typeLabel(String type) => switch (type) {
