@@ -200,10 +200,11 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   bool _loading = false;
   double _speed = 1.0;
 
-  // Псевдо-волна: детерминированные высоты по url.
-  late final List<double> _bars = List.generate(28, (i) {
+  static const int _barCount = 26;
+  // Псевдо-волна: детерминированные высоты по url (стабильно между кадрами).
+  late final List<double> _bars = List.generate(_barCount, (i) {
     final h = (widget.url.hashCode ^ (i * 2654435761)).abs() % 100;
-    return 0.3 + (h / 100) * 0.7;
+    return 0.28 + (h / 100) * 0.72;
   });
 
   @override
@@ -212,27 +213,39 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     super.dispose();
   }
 
-  Future<void> _toggle() async {
-    if (!_prepared) {
-      setState(() => _loading = true);
-      try {
-        await _player.setAudioSource(AudioSource.uri(Uri.parse(widget.url), headers: widget.headers));
-        _prepared = true;
-      } catch (_) {
-        if (mounted) {
-          setState(() => _loading = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Не удалось воспроизвести')));
-        }
-        return;
+  Future<void> _ensurePrepared() async {
+    if (_prepared) return;
+    setState(() => _loading = true);
+    try {
+      await _player.setAudioSource(AudioSource.uri(Uri.parse(widget.url), headers: widget.headers));
+      _prepared = true;
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Не удалось воспроизвести')));
       }
-      if (mounted) setState(() => _loading = false);
+      return;
     }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _toggle() async {
+    await _ensurePrepared();
+    if (!_prepared) return;
     if (_player.playing) {
       await _player.pause();
     } else {
       if (_player.processingState == ProcessingState.completed) await _player.seek(Duration.zero);
       _player.play();
     }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _seekToFraction(double f) async {
+    await _ensurePrepared();
+    final dur = _player.duration;
+    if (dur == null) return;
+    await _player.seek(dur * f.clamp(0.0, 1.0));
     if (mounted) setState(() {});
   }
 
@@ -250,13 +263,13 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     final circleBg = og ? Colors.white : _brand;
     final circleFg = og ? _brand : Colors.white;
     final active = og ? Colors.white : _brand;
-    final muted = og ? Colors.white.withValues(alpha: 0.35) : Colors.grey.withValues(alpha: 0.45);
-    final timeColor = og ? Colors.white.withValues(alpha: 0.85) : Colors.grey.shade600;
+    final muted = og ? Colors.white.withValues(alpha: 0.34) : _brand.withValues(alpha: 0.28);
+    final timeColor = og ? Colors.white.withValues(alpha: 0.9) : Colors.grey.shade600;
 
     return SizedBox(
-      width: 232,
+      width: 236,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
         child: Row(children: [
           GestureDetector(
             onTap: _toggle,
@@ -267,10 +280,10 @@ class _VoicePlayerState extends State<_VoicePlayer> {
               alignment: Alignment.center,
               child: _loading
                   ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: circleFg))
-                  : Icon(_player.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: circleFg, size: 24),
+                  : Icon(_player.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: circleFg, size: 26),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 11),
           Expanded(
             child: StreamBuilder<Duration>(
               stream: _player.positionStream,
@@ -278,50 +291,59 @@ class _VoicePlayerState extends State<_VoicePlayer> {
                 final pos = snap.data ?? Duration.zero;
                 final dur = _player.duration ?? Duration.zero;
                 final progress = dur.inMilliseconds == 0 ? 0.0 : (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+                final showPos = _player.playing || pos > Duration.zero;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      height: 26,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          for (var i = 0; i < _bars.length; i++)
-                            Expanded(
-                              child: Container(
-                                margin: const EdgeInsets.symmetric(horizontal: 0.8),
-                                height: 26 * _bars[i],
-                                decoration: BoxDecoration(
-                                  color: (i / _bars.length) <= progress ? active : muted,
-                                  borderRadius: BorderRadius.circular(2),
+                    LayoutBuilder(
+                      builder: (context, c) => GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapDown: (d) => _seekToFraction(d.localPosition.dx / c.maxWidth),
+                        onHorizontalDragUpdate: (d) => _seekToFraction(d.localPosition.dx / c.maxWidth),
+                        child: SizedBox(
+                          height: 30,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              for (var i = 0; i < _bars.length; i++)
+                                Expanded(
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(horizontal: 1),
+                                    height: (30 * _bars[i]).clamp(4.0, 30.0),
+                                    decoration: BoxDecoration(
+                                      color: ((i + 0.5) / _bars.length) <= progress ? active : muted,
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ),
-                        ],
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _player.playing || pos > Duration.zero ? _fmt(pos) : _fmt(dur),
-                      style: TextStyle(fontSize: 11, color: timeColor),
-                    ),
+                    const SizedBox(height: 4),
+                    Row(children: [
+                      Icon(Icons.mic_none_rounded, size: 12, color: timeColor),
+                      const SizedBox(width: 2),
+                      Text(showPos ? _fmt(pos) : _fmt(dur), style: TextStyle(fontSize: 11, color: timeColor, height: 1)),
+                    ]),
                   ],
                 );
               },
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           GestureDetector(
             onTap: _cycleSpeed,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: og ? Colors.white.withValues(alpha: 0.18) : _brand.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
+                color: og ? Colors.white.withValues(alpha: 0.20) : _brand.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(9),
               ),
               child: Text('${_speed == _speed.roundToDouble() ? _speed.toInt() : _speed}×',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: active)),
+                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: active)),
             ),
           ),
         ]),
