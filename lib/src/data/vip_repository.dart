@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../models/vip_client.dart';
 
@@ -22,8 +24,38 @@ class VipRepository {
     data['createdBy'] = createdBy;
     data['createdAt'] = FieldValue.serverTimestamp();
     data['updatedAt'] = FieldValue.serverTimestamp();
-    final ref = await _col.add(data);
-    return ref.id;
+
+    debugPrint('[VIP] ── создание клиента ──────────────');
+    debugPrint('[VIP] Firebase apps: ${Firebase.apps.length} ${Firebase.apps.map((a) => a.name).toList()}');
+    if (Firebase.apps.isEmpty) {
+      debugPrint('[VIP] ❌ Firebase НЕ инициализирован. Запустите `flutterfire configure` и пересоберите.');
+    }
+    debugPrint('[VIP] project: ${Firebase.apps.isNotEmpty ? Firebase.app().options.projectId : "—"}');
+    debugPrint('[VIP] createdBy(uid): $createdBy');
+    debugPrint('[VIP] поля: ${data.keys.toList()}');
+
+    try {
+      final ref = await _col.add(data);
+      debugPrint('[VIP] ✅ сохранено: clients/${ref.id}');
+      return ref.id;
+    } on FirebaseException catch (e, st) {
+      debugPrint('[VIP] ❌ FirebaseException plugin=${e.plugin} code=${e.code}');
+      debugPrint('[VIP]    message: ${e.message}');
+      if (e.code == 'permission-denied') {
+        debugPrint('[VIP]    → правила Firestore запрещают запись. Включите test-режим '
+            'или разрешите write в firestore.rules.');
+      } else if (e.code == 'unavailable') {
+        debugPrint('[VIP]    → нет сети / Firestore недоступен.');
+      } else if (e.code == 'not-found') {
+        debugPrint('[VIP]    → база Firestore не создана в консоли (Build → Firestore Database → Create).');
+      }
+      debugPrint('$st');
+      rethrow;
+    } catch (e, st) {
+      debugPrint('[VIP] ❌ ошибка: $e');
+      debugPrint('$st');
+      rethrow;
+    }
   }
 
   /// Обновить существующего клиента (updatedAt обновляется автоматически).

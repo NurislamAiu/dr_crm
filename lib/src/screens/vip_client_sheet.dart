@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
@@ -108,11 +109,21 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('[VIP] ❌ сохранение не удалось: $e');
+      debugPrint('$st');
       if (!mounted) return;
       setState(() => _saving = false);
+      final msg = e is FirebaseException
+          ? 'Firestore: ${e.code}${e.message != null ? ' — ${e.message}' : ''}'
+          : 'Не сохранено: $e';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не сохранено: $e'), backgroundColor: Colors.red.shade700),
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 6),
+        ),
       );
     }
   }

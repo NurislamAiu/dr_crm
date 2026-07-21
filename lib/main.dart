@@ -15,7 +15,14 @@ Future<void> main() async {
   // стартует — VIP-сохранение просто вернёт ошибку до настройки.
   try {
     await Firebase.initializeApp();
-  } catch (_) {}
+    debugPrint('[Firebase] ✅ инициализирован: '
+        '${Firebase.apps.map((a) => a.name).toList()} project=${Firebase.app().options.projectId}');
+  } catch (e, st) {
+    debugPrint('[Firebase] ❌ init FAILED: $e');
+    debugPrint('[Firebase] Скорее всего не запущен `flutterfire configure` '
+        '(нет GoogleService-Info.plist / google-services.json / firebase_options).');
+    debugPrint('$st');
+  }
   final config = await AppConfig.load();
   runApp(
     ProviderScope(
