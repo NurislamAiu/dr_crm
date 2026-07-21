@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import 'src/config/app_config.dart';
 import 'src/state/providers.dart';
@@ -9,6 +10,12 @@ import 'src/screens/login_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Firebase нужен для VIP-клиентов (Firestore). Защищённо: если проект ещё не
+  // подключён (не запущен `flutterfire configure`), приложение всё равно
+  // стартует — VIP-сохранение просто вернёт ошибку до настройки.
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
   final config = await AppConfig.load();
   runApp(
     ProviderScope(

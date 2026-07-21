@@ -4,12 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/api_client.dart';
 import '../api/realtime_client.dart';
 import '../config/app_config.dart';
+import '../data/vip_repository.dart';
 import '../models/models.dart';
 
 /// Переопределяется в main() после загрузки настроек.
 final appConfigProvider = Provider<AppConfig>((_) => throw UnimplementedError());
 
 final apiClientProvider = Provider<ApiClient>((ref) => ApiClient(ref.watch(appConfigProvider)));
+
+/// Репозиторий VIP-клиентов (Firestore, коллекция clients).
+final vipRepositoryProvider = Provider<VipRepository>((_) => VipRepository());
 
 final realtimeClientProvider = Provider<RealtimeClient>((ref) {
   final client = RealtimeClient(ref.watch(appConfigProvider));
