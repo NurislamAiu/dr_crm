@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../config/app_config.dart';
 import '../models/models.dart';
@@ -152,7 +153,13 @@ class ApiClient {
       _uri('/api/conversations/$conversationId/messages/send-media'),
     );
     if (_config.token != null) req.headers['authorization'] = 'Bearer ${_config.token}';
-    req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+    // Передаём content-type части — иначе backend видит octet-stream и по «магическим
+    // байтам» m4a (ftyp) может принять голосовое за видео.
+    MediaType? ct;
+    try {
+      ct = MediaType.parse(mimeType);
+    } catch (_) {}
+    req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName, contentType: ct));
     if (caption != null && caption.isNotEmpty) req.fields['caption'] = caption;
     final streamed = await req.send();
     final res = await http.Response.fromStream(streamed);

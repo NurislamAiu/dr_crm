@@ -113,10 +113,12 @@ function sniffMime(bytes: Uint8Array, provided: string): string {
   if (ascii(0, "%PDF")) return "application/pdf";
   if (eq(0, [0x49, 0x44, 0x33]) || (b[0] === 0xff && ((b[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg"; // ID3 / MPEG audio
   if (ascii(0, "OggS")) return "audio/ogg";
-  // ISO Base Media (ftyp @ offset 4): heic/mp4/mov
+  // ISO Base Media (ftyp @ offset 4): heic/m4a/mp4/mov
   if (ascii(4, "ftyp")) {
     const brand = String.fromCharCode(b[8] ?? 0, b[9] ?? 0, b[10] ?? 0, b[11] ?? 0);
     if (["heic", "heix", "hevc", "mif1", "heim", "heis"].includes(brand)) return "image/heic";
+    // m4a/m4b — аудио в mp4-контейнере (голосовые): не должны стать «видео».
+    if (["M4A ", "M4B ", "M4P ", "mp4a"].includes(brand)) return "audio/mp4";
     if (brand === "qt  ") return "video/quicktime";
     return "video/mp4";
   }

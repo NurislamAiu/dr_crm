@@ -22,6 +22,11 @@ test("sniff: MP4 (ftyp mp42) → video/mp4", () => {
   expect(sniff(b, OCTET)).toBe("video/mp4");
 });
 
+test("sniff: M4A (ftyp 'M4A ') → audio/mp4 (голосовое не станет видео)", () => {
+  const b = bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20); // ....ftypM4A␠
+  expect(sniff(b, OCTET)).toBe("audio/mp4");
+});
+
 test("sniff: PDF → application/pdf", () => {
   expect(sniff(bytes(0x25, 0x50, 0x44, 0x46, 0x2d), OCTET)).toBe("application/pdf");
 });
