@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 
+import 'firebase_options.dart';
 import 'src/config/app_config.dart';
 import 'src/state/providers.dart';
 import 'src/theme/app_theme.dart';
@@ -14,7 +15,7 @@ Future<void> main() async {
   // подключён (не запущен `flutterfire configure`), приложение всё равно
   // стартует — VIP-сохранение просто вернёт ошибку до настройки.
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     debugPrint('[Firebase] ✅ инициализирован: '
         '${Firebase.apps.map((a) => a.name).toList()} project=${Firebase.app().options.projectId}');
   } catch (e, st) {
