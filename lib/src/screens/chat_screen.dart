@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:record/record.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
 import '../state/providers.dart';
@@ -24,6 +27,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _input = TextEditingController();
   bool _sending = false;
   Timer? _poll;
+
+  // Запись голосового
+  final AudioRecorder _recorder = AudioRecorder();
+  bool _recording = false;
+  int _recSeconds = 0;
+  Timer? _recTimer;
+  String? _recPath;
 
   String get _convId => widget.conversation.id;
 
@@ -46,8 +56,75 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _recTimer?.cancel();
+    _recorder.dispose();
     _input.dispose();
     super.dispose();
+  }
+
+  // --- Голосовые сообщения (§18) ---
+  Future<void> _startRecording() async {
+    try {
+      if (!await _recorder.hasPermission()) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Нет доступа к микрофону')));
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+      _recPath = path;
+      setState(() {
+        _recording = true;
+        _recSeconds = 0;
+      });
+      _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() => _recSeconds++);
+      });
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Запись не началась: $e')));
+    }
+  }
+
+  Future<void> _stopRecordingAndSend() async {
+    _recTimer?.cancel();
+    final tooShort = _recSeconds < 1;
+    String? path;
+    try {
+      path = await _recorder.stop();
+    } catch (_) {}
+    setState(() => _recording = false);
+    if (path == null || tooShort) {
+      if (tooShort && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Слишком короткая запись')));
+      }
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final bytes = await File(path).readAsBytes();
+      await ref.read(messagesProvider(_convId).notifier).sendMedia(
+            _convId,
+            bytes: bytes,
+            fileName: 'voice.m4a',
+            mimeType: 'audio/mp4',
+          );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Голосовое не отправлено: $e')));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _cancelRecording() async {
+    _recTimer?.cancel();
+    try {
+      await _recorder.stop();
+      if (_recPath != null) {
+        final f = File(_recPath!);
+        if (await f.exists()) await f.delete();
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _recording = false);
   }
 
   Future<void> _send() async {
@@ -347,7 +424,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                 ),
               ),
-              _Composer(controller: _input, sending: _sending, onSend: _send, onAttach: _pickAndSendMedia),
+              _Composer(
+                controller: _input,
+                sending: _sending,
+                onSend: _send,
+                onAttach: _pickAndSendMedia,
+                recording: _recording,
+                recSeconds: _recSeconds,
+                onMicStart: _startRecording,
+                onRecordStop: _stopRecordingAndSend,
+                onRecordCancel: _cancelRecording,
+              ),
             ],
           ),
         ),
@@ -559,11 +646,28 @@ class _StatusIcon extends StatelessWidget {
 }
 
 class _Composer extends StatelessWidget {
-  const _Composer({required this.controller, required this.sending, required this.onSend, required this.onAttach});
+  const _Composer({
+    required this.controller,
+    required this.sending,
+    required this.onSend,
+    required this.onAttach,
+    required this.recording,
+    required this.recSeconds,
+    required this.onMicStart,
+    required this.onRecordStop,
+    required this.onRecordCancel,
+  });
   final TextEditingController controller;
   final bool sending;
   final VoidCallback onSend;
   final VoidCallback onAttach;
+  final bool recording;
+  final int recSeconds;
+  final VoidCallback onMicStart;
+  final VoidCallback onRecordStop;
+  final VoidCallback onRecordCancel;
+
+  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
@@ -574,35 +678,87 @@ class _Composer extends StatelessWidget {
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, -2))],
       ),
       padding: const EdgeInsets.fromLTRB(6, 8, 12, 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          IconButton(
-            icon: Icon(Icons.add_circle_outline, color: context.semantic.textSecondary),
-            tooltip: 'Прикрепить',
-            onPressed: sending ? null : onAttach,
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 5,
-              textInputAction: TextInputAction.newline,
-              decoration: InputDecoration(
-                hintText: 'Сообщение…',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              ),
+      child: recording ? _recordingBar(context) : _inputBar(context),
+    );
+  }
+
+  Widget _recordingBar(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(
+          icon: const Icon(Icons.delete_outline, color: Colors.red),
+          tooltip: 'Отменить',
+          onPressed: onRecordCancel,
+        ),
+        const _RecDot(),
+        const SizedBox(width: 8),
+        Text(_fmt(recSeconds), style: const TextStyle(fontWeight: FontWeight.w600, fontFeatures: [FontFeature.tabularFigures()])),
+        const SizedBox(width: 8),
+        Expanded(child: Text('запись…', style: TextStyle(color: context.semantic.textSecondary))),
+        _CircleGradientButton(icon: Icons.send_rounded, busy: sending, onTap: sending ? null : onRecordStop),
+      ],
+    );
+  }
+
+  Widget _inputBar(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        IconButton(
+          icon: Icon(Icons.add_circle_outline, color: context.semantic.textSecondary),
+          tooltip: 'Прикрепить',
+          onPressed: sending ? null : onAttach,
+        ),
+        Expanded(
+          child: TextField(
+            controller: controller,
+            minLines: 1,
+            maxLines: 5,
+            textInputAction: TextInputAction.newline,
+            decoration: InputDecoration(
+              hintText: 'Сообщение…',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             ),
           ),
-          const SizedBox(width: 8),
-          _CircleGradientButton(
-            icon: Icons.send_rounded,
-            busy: sending,
-            onTap: sending ? null : onSend,
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 8),
+        // Пусто → микрофон (голосовое); есть текст → отправка.
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: controller,
+          builder: (context, value, _) {
+            final hasText = value.text.trim().isNotEmpty;
+            return _CircleGradientButton(
+              icon: hasText ? Icons.send_rounded : Icons.mic_rounded,
+              busy: sending,
+              onTap: sending ? null : (hasText ? onSend : onMicStart),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _RecDot extends StatefulWidget {
+  const _RecDot();
+  @override
+  State<_RecDot> createState() => _RecDotState();
+}
+
+class _RecDotState extends State<_RecDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 700))..repeat(reverse: true);
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.3, end: 1).animate(_c),
+      child: Container(width: 12, height: 12, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
     );
   }
 }
