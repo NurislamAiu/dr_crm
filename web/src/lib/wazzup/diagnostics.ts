@@ -27,6 +27,11 @@ export interface WazzupDiagnostics {
     webhooksUri?: string | null;
     subscriptions?: Record<string, unknown>;
     error?: string;
+    // Диагностика приёма (почему входящие могут не доходить):
+    appUrl?: string | null;
+    expectedUri?: string;
+    matchesAppUrl?: boolean;
+    messagesAndStatuses?: boolean;
   };
   checkedAt: string;
   // Зарезервировано для последующих этапов:
@@ -43,6 +48,8 @@ export async function collectWazzupDiagnostics(
   const env = getEnv();
   const checkedAt = new Date().toISOString();
   const apiKeyConfigured = env.WAZZUP_API_KEY.length > 0;
+  const appUrl = env.APP_URL ?? null;
+  const expectedUri = appUrl ? `${appUrl}/api/webhooks/wazzup?secret=***` : undefined;
 
   const conn = await client.testConnection(correlationId);
 
@@ -57,7 +64,7 @@ export async function collectWazzupDiagnostics(
       adminMessage: null,
       expectedTransportMatches: false,
     },
-    webhook: { configured: false },
+    webhook: { configured: false, appUrl, ...(expectedUri ? { expectedUri } : {}) },
     checkedAt,
   };
 
@@ -85,17 +92,46 @@ export async function collectWazzupDiagnostics(
   // Webhook — отдельный вызов, ошибки изолируем, чтобы не ломать диагностику.
   try {
     const wh = await client.getWebhookSettings(correlationId);
+    const subs = wh.subscriptions as Record<string, unknown> | undefined;
     result.webhook = {
       configured: Boolean(wh.webhooksUri),
       webhooksUri: wh.webhooksUri,
       subscriptions: wh.subscriptions,
+      appUrl,
+      ...(expectedUri ? { expectedUri } : {}),
+      matchesAppUrl: webhookMatchesAppUrl(wh.webhooksUri, appUrl),
+      messagesAndStatuses: Boolean(subs?.["messagesAndStatuses"]),
     };
   } catch (err) {
     result.webhook = {
       configured: false,
       error: err instanceof Error ? err.message : "Не удалось получить настройки webhook",
+      appUrl,
+      ...(expectedUri ? { expectedUri } : {}),
     };
   }
 
   return result;
+}
+
+/**
+ * Совпадает ли URL, зарегистрированный в Wazzup, с нашим текущим `APP_URL`.
+ * Сравниваем только origin+path (секрет в query игнорируем). Именно рассинхрон
+ * этого адреса — главная причина «отправить могу, принять нет» при временном
+ * туннеле: новый адрес туннеля, а в Wazzup всё ещё старый/localhost.
+ */
+export function webhookMatchesAppUrl(
+  registeredUri: string | null | undefined,
+  appUrl: string | null,
+): boolean {
+  if (!registeredUri || !appUrl) return false;
+  try {
+    const reg = new URL(registeredUri);
+    const app = new URL(appUrl);
+    const regKey = `${reg.origin}${reg.pathname}`.toLowerCase().replace(/\/+$/, "");
+    const appKey = `${app.origin}/api/webhooks/wazzup`.toLowerCase().replace(/\/+$/, "");
+    return regKey === appKey;
+  } catch {
+    return false;
+  }
 }
