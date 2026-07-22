@@ -1,0 +1,53 @@
+rules_version = '2';
+
+// ВНИМАНИЕ: эти правила — ЦЕЛЕВЫЕ (Фаза 3). Их НЕЛЬЗЯ деплоить, пока приложение
+// не входит через Firebase Auth — иначе текущие лиды/VIP (пишутся без Auth в
+// test-режиме) перестанут сохраняться. Деплой правил — только на переключении.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Менеджер = у аутентифицированного пользователя есть профиль в users/{uid}.
+    function isManager() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // Профили менеджеров: читают менеджеры, пишет только сервер (Admin SDK).
+    match /users/{uid} {
+      allow read: if isManager();
+      allow write: if false;
+    }
+
+    // Контакты, диалоги, сообщения — только менеджеры.
+    match /contacts/{id} {
+      allow read, write: if isManager();
+    }
+    match /conversations/{cid} {
+      allow read, write: if isManager();
+      match /messages/{mid} {
+        allow read, write: if isManager();
+      }
+    }
+
+    // Лиды / VIP-клиенты / счётчики.
+    match /leads/{id} {
+      allow read, write: if isManager();
+    }
+    match /clients/{id} {
+      allow read, write: if isManager();
+    }
+    match /counters/{id} {
+      allow read, write: if isManager();
+    }
+
+    // Присутствие: читают менеджеры, пишет только сам о себе.
+    match /presence/{uid} {
+      allow read: if isManager();
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+  }
+}
