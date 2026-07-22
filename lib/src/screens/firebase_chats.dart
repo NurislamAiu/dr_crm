@@ -859,11 +859,11 @@ class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
                             onDismissed: (_) => ref.read(quickRepliesServiceProvider).delete(q.id),
                             child: Container(
                               margin: const EdgeInsets.symmetric(vertical: 4),
-                              decoration: BoxDecoration(
+                              child: Material(
                                 color: dark ? const Color(0xFF1B242B) : Colors.white,
                                 borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: ListTile(
+                                clipBehavior: Clip.antiAlias,
+                                child: ListTile(
                                 title: Text(q.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
                                 subtitle: Text(q.text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: dark ? Colors.white60 : Colors.black54)),
                                 trailing: IconButton(icon: const Icon(Icons.edit_outlined, size: 19), onPressed: () => _openEditor(existing: q)),
@@ -871,6 +871,7 @@ class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
                                   widget.onPick(q.text);
                                   Navigator.of(context).pop();
                                 },
+                              ),
                               ),
                             ),
                           );
