@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -83,18 +84,26 @@ class FirestoreChatRepository {
   final FirebaseFunctions _functions;
 
   Stream<List<FsConversation>> watchConversations() {
+    debugPrint('[FB] подписка на conversations');
     return _db.collection('conversations').orderBy('lastMessageAt', descending: true).snapshots().map(
-          (s) => s.docs.map(FsConversation.fromDoc).toList(),
-        );
+      (s) {
+        debugPrint('[FB] conversations: ${s.docs.length} шт.');
+        return s.docs.map(FsConversation.fromDoc).toList();
+      },
+    );
   }
 
   Stream<List<FsMessage>> watchMessages(String conversationId) {
+    debugPrint('[FB] подписка на messages conversationId=$conversationId');
     return _db
         .collection('messages')
         .where('conversationId', isEqualTo: conversationId)
         .orderBy('createdAt')
         .snapshots()
-        .map((s) => s.docs.map(FsMessage.fromDoc).toList());
+        .map((s) {
+      debugPrint('[FB] messages($conversationId): ${s.docs.length} шт.');
+      return s.docs.map(FsMessage.fromDoc).toList();
+    });
   }
 
   Future<void> markRead(String conversationId) {
@@ -103,10 +112,17 @@ class FirestoreChatRepository {
 
   /// Отправка текста через Cloud Function (sendMessage → Wazzup + Firestore).
   Future<void> sendText({required String phone, required String text, String? name}) async {
+    debugPrint('[FB-SEND] текст → $phone: "${text.length > 30 ? '${text.substring(0, 30)}…' : text}"');
     final callable = _functions.httpsCallable('sendMessage');
     final data = <String, dynamic>{'phone': phone, 'text': text};
     if (name != null) data['name'] = name;
-    await callable.call<Map<String, dynamic>>(data);
+    try {
+      final res = await callable.call<Map<String, dynamic>>(data);
+      debugPrint('[FB-SEND] ✅ sendMessage ответ: ${res.data}');
+    } catch (e) {
+      debugPrint('[FB-SEND] ❌ sendMessage ошибка: $e');
+      rethrow;
+    }
   }
 
   /// Отправка медиа: файл → Firebase Storage → Cloud Function sendMedia → Wazzup.
@@ -121,17 +137,28 @@ class FirestoreChatRepository {
     final token = _uuidLike();
     final ext = fileName.contains('.') ? fileName.split('.').last : '';
     final path = 'media/out/${DateTime.now().millisecondsSinceEpoch}_$token${ext.isNotEmpty ? '.$ext' : ''}';
+    debugPrint('[FB-MEDIA] старт: $kind, ${bytes.length} байт, $contentType → Storage: $path');
     final ref = FirebaseStorage.instance.ref(path);
-    await ref.putData(
-      Uint8List.fromList(bytes),
-      SettableMetadata(contentType: contentType),
-    );
+    try {
+      await ref.putData(Uint8List.fromList(bytes), SettableMetadata(contentType: contentType));
+      debugPrint('[FB-MEDIA] ✅ загружено в Storage');
+    } catch (e) {
+      debugPrint('[FB-MEDIA] ❌ ошибка загрузки в Storage: $e');
+      rethrow;
+    }
     final mediaUrl = await ref.getDownloadURL();
+    debugPrint('[FB-MEDIA] URL: $mediaUrl');
 
     final callable = _functions.httpsCallable('sendMedia');
     final data = <String, dynamic>{'phone': phone, 'mediaUrl': mediaUrl, 'type': kind};
     if (name != null) data['name'] = name;
-    await callable.call<Map<String, dynamic>>(data);
+    try {
+      final res = await callable.call<Map<String, dynamic>>(data);
+      debugPrint('[FB-MEDIA] ✅ sendMedia ответ: ${res.data}');
+    } catch (e) {
+      debugPrint('[FB-MEDIA] ❌ sendMedia ошибка: $e');
+      rethrow;
+    }
   }
 
   String _uuidLike() {

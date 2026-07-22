@@ -170,6 +170,7 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
         ]),
       ),
     );
+    debugPrint('[FB-PICK] выбор: $choice');
     if (choice == null) return;
 
     List<int>? bytes;
@@ -198,6 +199,7 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
       return;
     }
 
+    debugPrint('[FB-PICK] файл: $fileName ($mime), ${bytes.length} байт, kind=$kind');
     setState(() => _sending = true);
     try {
       await ref.read(firestoreChatRepositoryProvider).sendMedia(
@@ -208,7 +210,9 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
             kind: kind,
             name: widget.conversation.name,
           );
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Медиа отправлено')));
     } catch (e) {
+      debugPrint('[FB-PICK] ❌ отправка медиа: $e');
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не отправлено: $e')));
     } finally {
       if (mounted) setState(() => _sending = false);

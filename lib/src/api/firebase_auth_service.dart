@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -27,9 +28,16 @@ class FirebaseAuthService {
   Stream<User?> authStateChanges() => _auth.authStateChanges();
 
   Future<User> signIn(String email, String password) async {
-    final cred = await _auth.signInWithEmailAndPassword(email: email.trim(), password: password);
-    if (cred.user == null) throw FirebaseAuthException(code: 'no-user', message: 'Не удалось войти');
-    return cred.user!;
+    debugPrint('[FB-AUTH] вход: ${email.trim()}');
+    try {
+      final cred = await _auth.signInWithEmailAndPassword(email: email.trim(), password: password);
+      if (cred.user == null) throw FirebaseAuthException(code: 'no-user', message: 'Не удалось войти');
+      debugPrint('[FB-AUTH] ✅ вошли, uid=${cred.user!.uid}');
+      return cred.user!;
+    } catch (e) {
+      debugPrint('[FB-AUTH] ❌ ошибка входа: $e');
+      rethrow;
+    }
   }
 
   Future<void> signOut() => _auth.signOut();
@@ -40,6 +48,7 @@ class FirebaseAuthService {
     if (u == null) return null;
     final doc = await _db.collection('users').doc(u.uid).get();
     final d = doc.data();
+    debugPrint('[FB-AUTH] профиль users/${u.uid}: ${d == null ? 'НЕТ (нет доступа/документа)' : 'роль=${d['role']}'}');
     if (d == null) return null;
     return ManagerProfile(
       uid: u.uid,
