@@ -8,6 +8,7 @@ import '../config/app_config.dart';
 import '../data/firebase_manager_service.dart';
 import '../data/firestore_chat_repository.dart';
 import '../data/lead_repository.dart';
+import '../data/autoreply_service.dart';
 import '../data/presence_service.dart';
 import '../data/quick_replies_service.dart';
 import '../data/vip_repository.dart';
@@ -53,6 +54,9 @@ final quickRepliesServiceProvider = Provider<QuickRepliesService>((_) => QuickRe
 final quickRepliesProvider = StreamProvider<List<QuickReply>>((ref) {
   return ref.watch(quickRepliesServiceProvider).watch();
 });
+
+/// Автоответчик (Firestore config/autoReply).
+final autoReplyServiceProvider = Provider<AutoReplyService>((_) => AutoReplyService());
 
 /// Онлайн-менеджер (присутствие в системе).
 class OnlineUser {

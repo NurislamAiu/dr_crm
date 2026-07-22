@@ -61,7 +61,7 @@ export const ping = onRequest((_req, res) => {
  * ВНИМАНИЕ: вебхук Wazzup ещё указывает на Mac — эта функция тестируется
  * изолированно, пока не переключим (Фаза 3).
  */
-export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, async (req, res) => {
+export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (req, res) => {
   const provided =
     (req.query.secret as string | undefined) ??
     (req.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "");
@@ -79,6 +79,7 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, asy
   const firestore = db();
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const statuses = Array.isArray(body.statuses) ? body.statuses : [];
+  const inboundChats = new Set<string>();
 
   try {
     for (const m of messages) {
@@ -87,6 +88,7 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, asy
       if (!chatId || !m.messageId) continue;
 
       const inbound = !m.isEcho;
+      if (inbound) inboundChats.add(chatId);
       const type = m.type ?? "text";
       const text = m.text ?? null;
       const preview = text && text.length > 0 ? text : `[${type}]`;
@@ -147,12 +149,71 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, asy
         .set({ status: s.status, statusAt: ts() }, { merge: true });
     }
 
+    // Автоответчик (best-effort, не ломает приём при ошибке).
+    for (const cid of inboundChats) {
+      try {
+        await maybeAutoReply(cid, WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value());
+      } catch (e) {
+        console.error("autoReply error", e);
+      }
+    }
+
     res.json({ ok: true, messages: messages.length, statuses: statuses.length });
   } catch (e) {
     console.error("wazzupWebhook error", e);
     res.status(500).json({ error: "internal" });
   }
 });
+
+/**
+ * Автоответ на входящее (config/autoReply): текст, только вне рабочих часов
+ * (опц.), кулдаун на диалог — чтобы не спамить.
+ */
+async function maybeAutoReply(chatId: string, apiKey: string, channelId: string): Promise<void> {
+  const firestore = db();
+  const cfg = (await firestore.doc("config/autoReply").get()).data();
+  if (!cfg || cfg.enabled !== true || !cfg.text) return;
+
+  if (cfg.outsideHoursOnly === true) {
+    const tz = typeof cfg.tzOffset === "number" ? cfg.tzOffset : 5;
+    const localHour = (new Date().getUTCHours() + tz + 24) % 24;
+    const ws = typeof cfg.workStart === "number" ? cfg.workStart : 9;
+    const we = typeof cfg.workEnd === "number" ? cfg.workEnd : 20;
+    const withinWork = ws <= we ? localHour >= ws && localHour < we : localHour >= ws || localHour < we;
+    if (withinWork) return; // в рабочее время не автоотвечаем
+  }
+
+  const convRef = firestore.doc(`conversations/${chatId}`);
+  const conv = (await convRef.get()).data();
+  const cooldownMin = typeof cfg.cooldownMin === "number" ? cfg.cooldownMin : 360;
+  const last = (conv?.lastAutoReplyAt as admin.firestore.Timestamp | undefined)?.toDate();
+  if (last && Date.now() - last.getTime() < cooldownMin * 60000) return;
+
+  const crmMessageId = randomUUID();
+  const res = await wazzupSendText(apiKey, { channelId, chatId, chatType: "whatsapp", text: cfg.text as string, crmMessageId });
+  const messageId = String(res.messageId ?? crmMessageId);
+
+  await firestore.collection("messages").doc(messageId).set(
+    {
+      conversationId: chatId,
+      chatId,
+      externalMessageId: res.messageId ?? null,
+      direction: "outbound",
+      type: "text",
+      text: cfg.text,
+      status: "sent",
+      authorId: "auto",
+      isAuto: true,
+      crmMessageId,
+      createdAt: ts(),
+    },
+    { merge: true },
+  );
+  await convRef.set(
+    { lastAutoReplyAt: ts(), lastMessageAt: ts(), lastMessagePreview: (cfg.text as string).slice(0, 120) },
+    { merge: true },
+  );
+}
 
 /**
  * Разовая инициализация: делает всех существующих Firebase Auth пользователей

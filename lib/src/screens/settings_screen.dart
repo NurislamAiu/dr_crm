@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'autoreply_screen.dart';
 import 'firebase_managers_screen.dart';
 import 'managers_screen.dart';
 
@@ -57,6 +58,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   MaterialPageRoute(
                     builder: (_) => config.isFirebase ? const FirebaseManagersScreen() : const ManagersScreen(),
                   ),
+                ),
+              ),
+            ),
+          if ((config.role == 'admin' || config.role == 'administrator') && config.isFirebase)
+            Card(
+              margin: const EdgeInsets.only(bottom: 16),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0x22EF9F27),
+                  child: Icon(Icons.smart_toy_outlined, color: Color(0xFFC97A0A)),
+                ),
+                title: const Text('Автоответчик', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Автоответ на входящие (вне рабочих часов)'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const AutoReplyScreen()),
                 ),
               ),
             ),

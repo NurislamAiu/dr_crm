@@ -50,6 +50,11 @@ service cloud.firestore {
       allow read, write: if isManager();
     }
 
+    // Настройки (автоответчик и т.п.) — только менеджеры.
+    match /config/{id} {
+      allow read, write: if isManager();
+    }
+
     // Присутствие: читают менеджеры, пишет только сам о себе.
     match /presence/{uid} {
       allow read: if isManager();
