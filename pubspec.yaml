@@ -52,6 +52,7 @@ dependencies:
   cloud_firestore: ^5.4.4    # Firestore: коллекция clients (VIP)
   firebase_auth: ^5.3.1      # вход менеджеров (миграция backend на Firebase)
   cloud_functions: ^5.1.3    # вызов Cloud Functions (sendMessage, createManager)
+  firebase_storage: ^12.3.4  # медиа в firebase-режиме (загрузка/скачивание)
 
 dev_dependencies:
   flutter_test:

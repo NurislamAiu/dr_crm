@@ -1,9 +1,10 @@
 import { onRequest, onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import { randomUUID } from "crypto";
-import { normalizeChatId, parseDateMs, wazzupSendText, type WazzupMessage, type WazzupStatus } from "./wazzup";
+import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, type WazzupMessage, type WazzupStatus } from "./wazzup";
 
 admin.initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
@@ -225,4 +226,85 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
   );
 
   return { ok: true, messageId };
+});
+
+/**
+ * Отправка медиа менеджером (callable). Файл уже загружен приложением в
+ * Firebase Storage; сюда приходит публичная ссылка mediaUrl.
+ */
+export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
+  const data = (request.data ?? {}) as { phone?: string; mediaUrl?: string; type?: string; name?: string };
+  const chatId = normalizeChatId("whatsapp", String(data.phone ?? ""));
+  const mediaUrl = (data.mediaUrl ?? "").trim();
+  if (!chatId || !mediaUrl) throw new HttpsError("invalid-argument", "phone и mediaUrl обязательны");
+  const type = data.type ?? "document";
+
+  const crmMessageId = randomUUID();
+  const result = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
+    channelId: WAZZUP_CHANNEL_ID.value(),
+    chatId,
+    chatType: "whatsapp",
+    contentUri: mediaUrl,
+    crmMessageId,
+  });
+  const messageId = String(result.messageId ?? crmMessageId);
+  const name = (data.name ?? "").trim() || `+${chatId}`;
+  const firestore = db();
+
+  await firestore.collection("messages").doc(messageId).set(
+    {
+      conversationId: chatId,
+      chatId,
+      externalMessageId: result.messageId ?? null,
+      direction: "outbound",
+      type,
+      text: null,
+      mediaUrl,
+      status: "sent",
+      authorId: request.auth.uid,
+      crmMessageId,
+      createdAt: ts(),
+    },
+    { merge: true },
+  );
+  await firestore.collection("contacts").doc(chatId).set(
+    { phone: chatId, name, chatType: "whatsapp", lastMessageAt: ts(), updatedAt: ts() },
+    { merge: true },
+  );
+  await firestore.collection("conversations").doc(chatId).set(
+    { contactId: chatId, phone: chatId, name, chatType: "whatsapp", status: "open", unreadCount: 0, lastMessageAt: ts(), lastMessagePreview: `[${type}]`, updatedAt: ts() },
+    { merge: true },
+  );
+  return { ok: true, messageId };
+});
+
+/**
+ * Входящее медиа: как только в messages появляется contentUri без mediaUrl —
+ * скачиваем из Wazzup и кладём в Firebase Storage (durable), пишем публичную
+ * ссылку mediaUrl в документ.
+ */
+export const onMessageMedia = onDocumentCreated("messages/{id}", async (event) => {
+  const snap = event.data;
+  if (!snap) return;
+  const d = snap.data();
+  const contentUri = d.contentUri as string | undefined;
+  if (!contentUri || d.mediaUrl) return;
+
+  try {
+    const res = await fetch(contentUri);
+    if (!res.ok) return;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    const bucket = admin.storage().bucket();
+    const token = randomUUID();
+    const path = `media/in/${event.params.id}`;
+    await bucket.file(path).save(buf, {
+      metadata: { contentType, metadata: { firebaseStorageDownloadTokens: token } },
+    });
+    const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media&token=${token}`;
+    await snap.ref.set({ mediaUrl: url, mediaContentType: contentType }, { merge: true });
+  } catch (e) {
+    console.error("onMessageMedia error", e);
+  }
 });

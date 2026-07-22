@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../data/firestore_chat_repository.dart';
 import '../state/providers.dart';
@@ -155,6 +158,63 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     super.dispose();
   }
 
+  Future<void> _pickAndSend() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (s) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(leading: const Icon(Icons.photo_library_outlined), title: const Text('Фото из галереи'), onTap: () => Navigator.pop(s, 'gallery')),
+          ListTile(leading: const Icon(Icons.photo_camera_outlined), title: const Text('Камера'), onTap: () => Navigator.pop(s, 'camera')),
+          ListTile(leading: const Icon(Icons.attach_file), title: const Text('Файл'), onTap: () => Navigator.pop(s, 'file')),
+        ]),
+      ),
+    );
+    if (choice == null) return;
+
+    List<int>? bytes;
+    String? fileName;
+    String? mime;
+    String kind = 'document';
+    try {
+      if (choice == 'gallery' || choice == 'camera') {
+        final x = await ImagePicker().pickImage(source: choice == 'camera' ? ImageSource.camera : ImageSource.gallery, imageQuality: 85);
+        if (x == null) return;
+        bytes = await x.readAsBytes();
+        fileName = x.name;
+        mime = x.mimeType ?? 'image/jpeg';
+        kind = 'image';
+      } else {
+        final res = await FilePicker.platform.pickFiles(withData: true);
+        final f = res?.files.isNotEmpty == true ? res!.files.first : null;
+        if (f == null || f.bytes == null) return;
+        bytes = f.bytes!;
+        fileName = f.name;
+        mime = 'application/octet-stream';
+        kind = 'document';
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось выбрать: $e')));
+      return;
+    }
+
+    setState(() => _sending = true);
+    try {
+      await ref.read(firestoreChatRepositoryProvider).sendMedia(
+            phone: widget.conversation.phone ?? widget.conversation.id,
+            bytes: bytes,
+            fileName: fileName,
+            contentType: mime,
+            kind: kind,
+            name: widget.conversation.name,
+          );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не отправлено: $e')));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty || _sending) return;
@@ -261,7 +321,10 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
 
   Widget _bubble(FsMessage m, bool dark) {
     final out = m.isOutbound;
-    final body = m.text ?? (m.type != 'text' ? '[${m.type}]' : '');
+    final hasMedia = m.media != null && m.media!.isNotEmpty;
+    final isImage = m.type == 'image' && hasMedia;
+    final hasText = m.text != null && m.text!.isNotEmpty;
+    final body = hasText ? m.text! : (!hasMedia && m.type != 'text' ? '[${m.type}]' : '');
     final time = m.createdAt != null ? DateFormat('HH:mm').format(m.createdAt!) : '';
     final textColor = out ? Colors.white : (dark ? const Color(0xFFE9EEF0) : const Color(0xFF0E1B22));
     final metaColor = out ? Colors.white.withValues(alpha: 0.85) : (dark ? Colors.white54 : Colors.black38);
@@ -269,7 +332,7 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
       alignment: out ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 3),
-        padding: const EdgeInsets.fromLTRB(13, 8, 11, 7),
+        padding: EdgeInsets.fromLTRB(isImage ? 4 : 13, isImage ? 4 : 8, isImage ? 4 : 11, isImage ? 6 : 7),
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
         decoration: BoxDecoration(
           gradient: out ? brandGradient : null,
@@ -283,9 +346,16 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
           boxShadow: [BoxShadow(color: out ? AppColors.brand.withValues(alpha: 0.22) : Colors.black.withValues(alpha: dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2))],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-          Text(body, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.3)),
-          const SizedBox(height: 2),
-          Row(mainAxisSize: MainAxisSize.min, children: [
+          if (isImage) _mediaImage(m.media!),
+          if (hasMedia && !isImage) _mediaCard(m, out),
+          if (body.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(top: hasMedia ? 6 : 0, left: isImage ? 8 : 0, right: isImage ? 8 : 0),
+              child: Text(body, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.3)),
+            ),
+          Padding(
+            padding: EdgeInsets.only(top: 2, right: isImage ? 8 : 0),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
             Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
             if (out) ...[
               const SizedBox(width: 3),
@@ -295,7 +365,59 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
                 color: m.status == 'read' ? const Color(0xFFBEEFFF) : metaColor,
               ),
             ],
-          ]),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _mediaImage(String url) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 258, maxHeight: 320, minWidth: 160, minHeight: 110),
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          loadingBuilder: (c, w, p) => p == null ? w : Container(width: 200, height: 150, color: Colors.black12, alignment: Alignment.center, child: const CircularProgressIndicator(strokeWidth: 2)),
+          errorBuilder: (_, _, _) => Container(width: 200, height: 120, color: Colors.black12, alignment: Alignment.center, child: const Icon(Icons.broken_image_outlined, color: Colors.grey)),
+        ),
+      ),
+    );
+  }
+
+  Widget _mediaCard(FsMessage m, bool out) {
+    final fg = out ? Colors.white : AppColors.brand;
+    final sub = out ? Colors.white70 : Colors.grey;
+    final icon = switch (m.type) {
+      'audio' => Icons.mic_rounded,
+      'video' => Icons.play_circle_outline,
+      _ => Icons.description_outlined,
+    };
+    final label = switch (m.type) {
+      'audio' => 'Голосовое / аудио',
+      'video' => 'Видео',
+      _ => 'Файл',
+    };
+    return InkWell(
+      onTap: m.media != null ? () => launchUrl(Uri.parse(m.media!), mode: LaunchMode.externalApplication) : null,
+      child: SizedBox(
+        width: 226,
+        child: Row(children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(color: (out ? Colors.white : AppColors.brand).withValues(alpha: 0.2), borderRadius: BorderRadius.circular(11)),
+            child: Icon(icon, color: fg, size: 22),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(label, style: TextStyle(color: out ? Colors.white : const Color(0xFF10202A), fontWeight: FontWeight.w600, fontSize: 14)),
+              Text('Открыть', style: TextStyle(fontSize: 11.5, color: sub)),
+            ]),
+          ),
+          Icon(Icons.download_rounded, size: 20, color: fg),
         ]),
       ),
     );
@@ -308,6 +430,10 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
         color: dark ? const Color(0xFF12191E) : Colors.white,
         child: Row(children: [
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline_rounded, color: AppColors.brand),
+            onPressed: _sending ? null : _pickAndSend,
+          ),
           Expanded(
             child: TextField(
               controller: _input,

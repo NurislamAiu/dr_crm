@@ -52,3 +52,33 @@ export async function wazzupSendText(
   if (!res.ok) throw new Error(`Wazzup ${res.status}: ${JSON.stringify(data)}`);
   return { messageId: data.messageId };
 }
+
+/** POST /v3/message — отправка медиа по публичной ссылке contentUri. */
+export async function wazzupSendMedia(
+  apiKey: string,
+  input: { channelId: string; chatId: string; chatType: string; contentUri: string; crmMessageId: string },
+): Promise<{ messageId?: string }> {
+  const res = await fetch("https://api.wazzup24.com/v3/message", {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      channelId: input.channelId,
+      chatId: input.chatId,
+      chatType: input.chatType,
+      contentUri: input.contentUri,
+      crmMessageId: input.crmMessageId,
+      clearUnanswered: true,
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { messageId?: string };
+  if (!res.ok) throw new Error(`Wazzup ${res.status}: ${JSON.stringify(data)}`);
+  return { messageId: data.messageId };
+}
+
+/** Тип медиа по MIME → как в приложении (image/audio/video/document). */
+export function kindForMime(mime: string): string {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  return "document";
+}
