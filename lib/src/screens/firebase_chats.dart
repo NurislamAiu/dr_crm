@@ -760,27 +760,49 @@ class _QuickRepliesSheet extends ConsumerStatefulWidget {
 }
 
 class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
-  final _add = TextEditingController();
-  bool _adding = false;
-
-  @override
-  void dispose() {
-    _add.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submitAdd() async {
-    final t = _add.text.trim();
-    if (t.isEmpty) return;
-    setState(() => _adding = true);
-    try {
-      await ref.read(quickRepliesServiceProvider).add(t);
-      _add.clear();
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
-    } finally {
-      if (mounted) setState(() => _adding = false);
+  Future<void> _openEditor({QuickReply? existing}) async {
+    final titleC = TextEditingController(text: existing?.title ?? '');
+    final textC = TextEditingController(text: existing?.text ?? '');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text(existing == null ? 'Новый шаблон' : 'Редактировать'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: titleC,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(labelText: 'Заголовок', hintText: 'напр. Приветствие'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: textC,
+            minLines: 2, maxLines: 6,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(labelText: 'Основной текст', hintText: 'Текст, который вставится в сообщение'),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    if (ok == true && textC.text.trim().isNotEmpty) {
+      final svc = ref.read(quickRepliesServiceProvider);
+      final title = titleC.text.trim().isEmpty ? textC.text.trim() : titleC.text.trim();
+      try {
+        if (existing == null) {
+          await svc.add(title: title, text: textC.text.trim());
+        } else {
+          await svc.update(existing.id, title: title, text: textC.text.trim());
+        }
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+      }
     }
+    titleC.dispose();
+    textC.dispose();
   }
 
   @override
@@ -815,7 +837,7 @@ class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
                     error: (e, _) => Center(child: Text('Ошибка: $e')),
                     data: (items) {
                       if (items.isEmpty) {
-                        return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Пока нет шаблонов. Добавьте ниже.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))));
+                        return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Пока нет шаблонов.\nНажмите «Добавить».', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))));
                       }
                       return ListView.builder(
                         controller: scrollCtrl,
@@ -841,8 +863,9 @@ class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
                                 borderRadius: BorderRadius.circular(14),
                               ),
                               child: ListTile(
-                                title: Text(q.text, maxLines: 3, overflow: TextOverflow.ellipsis),
-                                trailing: const Icon(Icons.north_east_rounded, size: 18, color: AppColors.brand),
+                                title: Text(q.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+                                subtitle: Text(q.text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: dark ? Colors.white60 : Colors.black54)),
+                                trailing: IconButton(icon: const Icon(Icons.edit_outlined, size: 19), onPressed: () => _openEditor(existing: q)),
                                 onTap: () {
                                   widget.onPick(q.text);
                                   Navigator.of(context).pop();
@@ -858,33 +881,17 @@ class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
             SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-                child: Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _add,
-                      minLines: 1, maxLines: 3,
-                      decoration: InputDecoration(
-                        hintText: 'Новый шаблон…',
-                        filled: true,
-                        fillColor: dark ? const Color(0xFF232E36) : Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      ),
-                    ),
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                child: SizedBox(
+                  height: 50,
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: AppColors.brand, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Добавить шаблон', style: TextStyle(fontWeight: FontWeight.w700)),
+                    onPressed: () => _openEditor(),
                   ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: _adding ? null : _submitAdd,
-                    child: Container(
-                      width: 46, height: 46,
-                      decoration: const BoxDecoration(color: AppColors.brand, shape: BoxShape.circle),
-                      child: _adding
-                          ? const Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.add, color: Colors.white),
-                    ),
-                  ),
-                ]),
+                ),
               ),
             ),
           ]),
