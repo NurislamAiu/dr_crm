@@ -44,6 +44,9 @@ class FsMessage {
     required this.mediaUrl,
     required this.status,
     required this.createdAt,
+    required this.isEdited,
+    required this.isDeleted,
+    required this.replyToText,
   });
   final String id;
   final String direction; // inbound | outbound
@@ -53,6 +56,9 @@ class FsMessage {
   final String? mediaUrl; // durable-ссылка (Storage), fallback contentUri
   final String status;
   final DateTime? createdAt;
+  final bool isEdited;
+  final bool isDeleted;
+  final String? replyToText;
 
   bool get isOutbound => direction == 'outbound';
   String? get media => mediaUrl ?? contentUri;
@@ -68,6 +74,9 @@ class FsMessage {
       mediaUrl: d['mediaUrl'] as String?,
       status: (d['status'] ?? '') as String,
       createdAt: (d['createdAt'] as Timestamp?)?.toDate(),
+      isEdited: d['isEdited'] == true,
+      isDeleted: d['isDeleted'] == true,
+      replyToText: d['replyToText'] as String?,
     );
   }
 }
@@ -129,12 +138,15 @@ class FirestoreChatRepository {
   }
 
   /// Отправка текста через Cloud Function (sendMessage → Wazzup + Firestore).
-  Future<void> sendText({required String phone, required String text, String? name}) async {
-    debugPrint('[FB-SEND] текст → $phone: "${text.length > 30 ? '${text.substring(0, 30)}…' : text}"');
+  /// [refMessageId] — ответ (цитата) на сообщение.
+  Future<void> sendText({required String phone, required String text, String? name, String? refMessageId, String? replyToText}) async {
+    debugPrint('[FB-SEND] текст → $phone: "${text.length > 30 ? '${text.substring(0, 30)}…' : text}"${refMessageId != null ? ' (ответ)' : ''}');
     await _throttle();
     final callable = _functions.httpsCallable('sendMessage');
     final data = <String, dynamic>{'phone': phone, 'text': text};
     if (name != null) data['name'] = name;
+    if (refMessageId != null) data['refMessageId'] = refMessageId;
+    if (replyToText != null) data['replyToText'] = replyToText;
     try {
       final res = await callable.call<Map<String, dynamic>>(data);
       debugPrint('[FB-SEND] ✅ sendMessage ответ: ${res.data}');
@@ -142,6 +154,16 @@ class FirestoreChatRepository {
       debugPrint('[FB-SEND] ❌ sendMessage ошибка: $e');
       rethrow;
     }
+  }
+
+  /// Редактировать своё сообщение (Wazzup PATCH + Firestore).
+  Future<void> editText({required String messageId, required String text}) async {
+    await _functions.httpsCallable('editMessage').call<Map<String, dynamic>>({'messageId': messageId, 'text': text});
+  }
+
+  /// Удалить своё сообщение (Wazzup DELETE + пометка).
+  Future<void> deleteMessage(String messageId) async {
+    await _functions.httpsCallable('deleteMessage').call<Map<String, dynamic>>({'messageId': messageId});
   }
 
   /// Отправка медиа: файл → Firebase Storage → Cloud Function sendMedia → Wazzup.

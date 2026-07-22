@@ -4,7 +4,7 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import { randomUUID, createHmac } from "crypto";
-import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, type WazzupMessage, type WazzupStatus } from "./wazzup";
+import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, wazzupEditText, wazzupDeleteMessage, type WazzupMessage, type WazzupStatus } from "./wazzup";
 
 admin.initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
@@ -245,10 +245,11 @@ export const updateManager = onCall(async (request) => {
  */
 export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
-  const data = (request.data ?? {}) as { phone?: string; text?: string; name?: string };
+  const data = (request.data ?? {}) as { phone?: string; text?: string; name?: string; refMessageId?: string; replyToText?: string };
   const chatId = normalizeChatId("whatsapp", String(data.phone ?? ""));
   const text = (data.text ?? "").trim();
   if (!chatId || !text) throw new HttpsError("invalid-argument", "phone и text обязательны");
+  const refMessageId = (data.refMessageId ?? "").trim() || undefined;
 
   const crmMessageId = randomUUID();
   const result = await wazzupSendText(WAZZUP_API_KEY.value(), {
@@ -257,6 +258,7 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
     chatType: "whatsapp",
     text,
     crmMessageId,
+    refMessageId,
   });
   const messageId = String(result.messageId ?? crmMessageId);
   const name = (data.name ?? "").trim() || `+${chatId}`;
@@ -273,6 +275,7 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
       status: "sent",
       authorId: request.auth.uid,
       crmMessageId,
+      ...(refMessageId ? { replyToId: refMessageId, replyToText: (data.replyToText ?? "").slice(0, 200) } : {}),
       createdAt: ts(),
     },
     { merge: true },
@@ -345,6 +348,32 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
     { merge: true },
   );
   return { ok: true, messageId };
+});
+
+/** Редактирование своего сообщения (callable, §16): PATCH Wazzup + Firestore. */
+export const editMessage = onCall({ secrets: [WAZZUP_API_KEY] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
+  const data = (request.data ?? {}) as { messageId?: string; text?: string };
+  const messageId = (data.messageId ?? "").trim();
+  const text = (data.text ?? "").trim();
+  if (!messageId || !text) throw new HttpsError("invalid-argument", "messageId и text обязательны");
+  await wazzupEditText(WAZZUP_API_KEY.value(), messageId, text);
+  await db().collection("messages").doc(messageId).set({ text, isEdited: true, updatedAt: ts() }, { merge: true });
+  return { ok: true };
+});
+
+/** Удаление своего сообщения (callable, §16): DELETE Wazzup + пометка в Firestore. */
+export const deleteMessage = onCall({ secrets: [WAZZUP_API_KEY] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
+  const data = (request.data ?? {}) as { messageId?: string };
+  const messageId = (data.messageId ?? "").trim();
+  if (!messageId) throw new HttpsError("invalid-argument", "messageId обязателен");
+  await wazzupDeleteMessage(WAZZUP_API_KEY.value(), messageId);
+  await db().collection("messages").doc(messageId).set(
+    { isDeleted: true, text: null, mediaUrl: null, contentUri: null, updatedAt: ts() },
+    { merge: true },
+  );
+  return { ok: true };
 });
 
 /**

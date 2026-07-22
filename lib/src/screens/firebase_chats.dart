@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
@@ -224,6 +225,8 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   Timer? _recTimer;
   String? _recPath;
 
+  FsMessage? _replyTo; // сообщение, на которое отвечаем
+
   @override
   void initState() {
     super.initState();
@@ -370,13 +373,19 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
+    final reply = _replyTo;
+    setState(() {
+      _sending = true;
+      _replyTo = null;
+    });
     _input.clear();
     try {
       await ref.read(firestoreChatRepositoryProvider).sendText(
             phone: widget.conversation.phone ?? widget.conversation.id,
             text: text,
             name: widget.conversation.name,
+            refMessageId: reply?.id,
+            replyToText: reply?.text,
           );
     } catch (e) {
       if (mounted) {
@@ -385,6 +394,98 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
       }
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _showMessageActions(FsMessage m) {
+    final canEditDelete = m.isOutbound && !m.isDeleted && (m.status == 'sent' || m.status == 'delivered' || m.status == 'read' || m.status == 'accepted');
+    if (m.isDeleted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.reply_rounded),
+            title: const Text('Ответить'),
+            onTap: () {
+              Navigator.pop(sheet);
+              setState(() => _replyTo = m);
+            },
+          ),
+          if (m.text != null && m.text!.isNotEmpty)
+            ListTile(
+              leading: const Icon(Icons.copy_outlined),
+              title: const Text('Копировать'),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: m.text!));
+                Navigator.pop(sheet);
+              },
+            ),
+          if (canEditDelete && m.type == 'text')
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Изменить'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _editMessage(m);
+              },
+            ),
+          if (canEditDelete)
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('Удалить', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(sheet);
+                _deleteMessage(m);
+              },
+            ),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _editMessage(FsMessage m) async {
+    final c = TextEditingController(text: m.text ?? '');
+    final newText = await showDialog<String>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Изменить сообщение'),
+        content: TextField(controller: c, minLines: 1, maxLines: 6, autofocus: true, decoration: const InputDecoration(border: OutlineInputBorder())),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(d, c.text.trim()), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    c.dispose();
+    if (newText == null || newText.isEmpty || newText == m.text) return;
+    try {
+      await ref.read(firestoreChatRepositoryProvider).editText(messageId: m.id, text: newText);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не изменено: $e')));
+    }
+  }
+
+  Future<void> _deleteMessage(FsMessage m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Удалить сообщение?'),
+        content: const Text('Будет удалено и у клиента в WhatsApp.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Отмена')),
+          FilledButton(style: FilledButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(d, true), child: const Text('Удалить')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(firestoreChatRepositoryProvider).deleteMessage(m.id);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалено: $e')));
     }
   }
 
@@ -433,6 +534,7 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
                   ),
                 ),
           ),
+          if (_replyTo != null) _replyBar(dark),
           _composer(dark),
         ]),
       ),
@@ -468,55 +570,79 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
 
   Widget _bubble(FsMessage m, bool dark) {
     final out = m.isOutbound;
-    final hasMedia = m.media != null && m.media!.isNotEmpty;
+    final deleted = m.isDeleted;
+    final hasMedia = !deleted && m.media != null && m.media!.isNotEmpty;
     final isImage = m.type == 'image' && hasMedia;
-    final hasText = m.text != null && m.text!.isNotEmpty;
-    final body = hasText ? m.text! : (!hasMedia && m.type != 'text' ? '[${m.type}]' : '');
+    final hasText = !deleted && m.text != null && m.text!.isNotEmpty;
+    final body = deleted ? 'Сообщение удалено' : (hasText ? m.text! : (!hasMedia && m.type != 'text' ? '[${m.type}]' : ''));
     final time = m.createdAt != null ? DateFormat('HH:mm').format(m.createdAt!) : '';
     final textColor = out ? Colors.white : (dark ? const Color(0xFFE9EEF0) : const Color(0xFF0E1B22));
     final metaColor = out ? Colors.white.withValues(alpha: 0.85) : (dark ? Colors.white54 : Colors.black38);
     return Align(
       alignment: out ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 3),
-        padding: EdgeInsets.fromLTRB(isImage ? 4 : 13, isImage ? 4 : 8, isImage ? 4 : 11, isImage ? 6 : 7),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
-        decoration: BoxDecoration(
-          gradient: out ? brandGradient : null,
-          color: out ? null : (dark ? const Color(0xFF1B242B) : Colors.white),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(out ? 18 : 6),
-            bottomRight: Radius.circular(out ? 6 : 18),
-          ),
-          boxShadow: [BoxShadow(color: out ? AppColors.brand.withValues(alpha: 0.22) : Colors.black.withValues(alpha: dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2))],
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-          if (isImage) _mediaImage(m.media!),
-          if (hasMedia && !isImage && m.type == 'audio') _FbVoicePlayer(url: m.media!, onGradient: out),
-          if (hasMedia && !isImage && m.type != 'audio') _mediaCard(m, out),
-          if (body.isNotEmpty)
-            Padding(
-              padding: EdgeInsets.only(top: hasMedia ? 6 : 0, left: isImage ? 8 : 0, right: isImage ? 8 : 0),
-              child: Text(body, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.3)),
+      child: GestureDetector(
+        onLongPress: () => _showMessageActions(m),
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          padding: EdgeInsets.fromLTRB(isImage ? 4 : 13, isImage ? 4 : 8, isImage ? 4 : 11, isImage ? 6 : 7),
+          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
+          decoration: BoxDecoration(
+            gradient: out && !deleted ? brandGradient : null,
+            color: deleted ? (dark ? const Color(0xFF222C33) : const Color(0xFFE9EEF0)) : (out ? null : (dark ? const Color(0xFF1B242B) : Colors.white)),
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(18),
+              topRight: const Radius.circular(18),
+              bottomLeft: Radius.circular(out ? 18 : 6),
+              bottomRight: Radius.circular(out ? 6 : 18),
             ),
-          Padding(
-            padding: EdgeInsets.only(top: 2, right: isImage ? 8 : 0),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
-            if (out) ...[
-              const SizedBox(width: 3),
-              Icon(
-                m.status == 'read' ? Icons.done_all : (m.status == 'delivered' ? Icons.done_all : Icons.check),
-                size: 13,
-                color: m.status == 'read' ? const Color(0xFFBEEFFF) : metaColor,
-              ),
-            ],
-            ]),
+            boxShadow: [BoxShadow(color: out && !deleted ? AppColors.brand.withValues(alpha: 0.22) : Colors.black.withValues(alpha: dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2))],
           ),
-        ]),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+            if (!deleted && m.replyToText != null && m.replyToText!.isNotEmpty) _replyQuote(m.replyToText!, out, isImage),
+            if (isImage) _mediaImage(m.media!),
+            if (hasMedia && !isImage && m.type == 'audio') _FbVoicePlayer(url: m.media!, onGradient: out),
+            if (hasMedia && !isImage && m.type != 'audio') _mediaCard(m, out),
+            if (body.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(top: hasMedia ? 6 : 0, left: isImage ? 8 : 0, right: isImage ? 8 : 0),
+                child: Text(body, style: TextStyle(color: deleted ? (dark ? Colors.white54 : Colors.black45) : textColor, fontSize: 15.5, height: 1.3, fontStyle: deleted ? FontStyle.italic : null)),
+              ),
+            Padding(
+              padding: EdgeInsets.only(top: 2, right: isImage ? 8 : 0),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (m.isEdited && !deleted) ...[
+                  Text('изм.', style: TextStyle(fontSize: 10, color: metaColor)),
+                  const SizedBox(width: 4),
+                ],
+                Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
+                if (out && !deleted) ...[
+                  const SizedBox(width: 3),
+                  Icon(
+                    m.status == 'read' ? Icons.done_all : (m.status == 'delivered' ? Icons.done_all : Icons.check),
+                    size: 13,
+                    color: m.status == 'read' ? const Color(0xFFBEEFFF) : metaColor,
+                  ),
+                ],
+              ]),
+            ),
+          ]),
+        ),
       ),
+    );
+  }
+
+  Widget _replyQuote(String text, bool out, bool isImage) {
+    final c = out ? Colors.white : AppColors.brand;
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(bottom: 6, left: isImage ? 8 : 0, right: isImage ? 8 : 0, top: isImage ? 6 : 0),
+      padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+      decoration: BoxDecoration(
+        color: (out ? Colors.white : AppColors.brand).withValues(alpha: 0.14),
+        border: Border(left: BorderSide(color: c.withValues(alpha: 0.7), width: 3)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: out ? Colors.white.withValues(alpha: 0.9) : (Theme.of(context).brightness == Brightness.dark ? Colors.white70 : Colors.black54))),
     );
   }
 
@@ -566,6 +692,34 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
             ]),
           ),
           Icon(Icons.download_rounded, size: 20, color: fg),
+        ]),
+      ),
+    );
+  }
+
+  Widget _replyBar(bool dark) {
+    final m = _replyTo!;
+    final preview = m.isDeleted ? 'Сообщение удалено' : (m.text?.isNotEmpty == true ? m.text! : '[${m.type}]');
+    return Container(
+      color: dark ? const Color(0xFF12191E) : Colors.white,
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 0),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+        decoration: BoxDecoration(
+          color: AppColors.brand.withValues(alpha: 0.10),
+          border: const Border(left: BorderSide(color: AppColors.brand, width: 3)),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(children: [
+          const Icon(Icons.reply_rounded, size: 16, color: AppColors.brand),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(m.isOutbound ? 'Ваше сообщение' : 'Ответ', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppColors.brand)),
+              Text(preview, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: dark ? Colors.white70 : Colors.black54)),
+            ]),
+          ),
+          IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => setState(() => _replyTo = null)),
         ]),
       ),
     );

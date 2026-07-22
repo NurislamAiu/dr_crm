@@ -34,7 +34,7 @@ export interface WazzupStatus {
 /** POST /v3/message — отправка текста через Wazzup. Возвращает messageId. */
 export async function wazzupSendText(
   apiKey: string,
-  input: { channelId: string; chatId: string; chatType: string; text: string; crmMessageId: string },
+  input: { channelId: string; chatId: string; chatType: string; text: string; crmMessageId: string; refMessageId?: string },
 ): Promise<{ messageId?: string }> {
   const res = await fetch("https://api.wazzup24.com/v3/message", {
     method: "POST",
@@ -45,12 +45,32 @@ export async function wazzupSendText(
       chatType: input.chatType,
       text: input.text,
       crmMessageId: input.crmMessageId,
+      ...(input.refMessageId ? { refMessageId: input.refMessageId } : {}),
       clearUnanswered: true,
     }),
   });
   const data = (await res.json().catch(() => ({}))) as { messageId?: string; error?: unknown };
   if (!res.ok) throw new Error(`Wazzup ${res.status}: ${JSON.stringify(data)}`);
   return { messageId: data.messageId };
+}
+
+/** PATCH /v3/message/:id — редактирование текста. */
+export async function wazzupEditText(apiKey: string, messageId: string, text: string): Promise<void> {
+  const res = await fetch(`https://api.wazzup24.com/v3/message/${encodeURIComponent(messageId)}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`Wazzup edit ${res.status}: ${await res.text()}`);
+}
+
+/** DELETE /v3/message/:id — удаление. */
+export async function wazzupDeleteMessage(apiKey: string, messageId: string): Promise<void> {
+  const res = await fetch(`https://api.wazzup24.com/v3/message/${encodeURIComponent(messageId)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Wazzup delete ${res.status}: ${await res.text()}`);
 }
 
 /** POST /v3/message — отправка медиа по публичной ссылке contentUri. */
