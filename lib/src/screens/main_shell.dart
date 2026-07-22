@@ -18,8 +18,45 @@ class MainShell extends ConsumerStatefulWidget {
   ConsumerState<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends ConsumerState<MainShell> {
+class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserver {
   int _index = 0;
+  bool _presenceOn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startPresence());
+  }
+
+  @override
+  void dispose() {
+    if (_presenceOn) ref.read(firebasePresenceServiceProvider).stop();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  void _startPresence() {
+    final cfg = ref.read(appConfigProvider);
+    if (!cfg.isFirebase || cfg.userId == null) return;
+    ref.read(firebasePresenceServiceProvider).start(cfg.userId!, cfg.userName ?? '');
+    _presenceOn = true;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final cfg = ref.read(appConfigProvider);
+    if (!cfg.isFirebase) return;
+    final presence = ref.read(firebasePresenceServiceProvider);
+    if (state == AppLifecycleState.resumed) {
+      _startPresence();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      if (_presenceOn) {
+        presence.stop();
+        _presenceOn = false;
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

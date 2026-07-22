@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../data/firestore_chat_repository.dart';
+import '../data/presence_service.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'lead_sheet.dart';
@@ -38,12 +39,14 @@ class FirebaseConversationsScreen extends ConsumerWidget {
           bottom: false,
           child: Column(
             children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
                 child: Row(children: [
-                  Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
-                  SizedBox(width: 8),
-                  _FbBadge(),
+                  const Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
+                  const SizedBox(width: 8),
+                  const _FbBadge(),
+                  const Spacer(),
+                  const _FbOnlineBadge(),
                 ]),
               ),
               Expanded(
@@ -137,6 +140,70 @@ class _FbBadge extends StatelessWidget {
         decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
         child: const Text('Firebase', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFC97A0A))),
       );
+}
+
+/// «N в сети» (presence из Firestore). Тап — список имён.
+class _FbOnlineBadge extends ConsumerWidget {
+  const _FbOnlineBadge();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return StreamBuilder<List<PresenceUser>>(
+      stream: ref.watch(firebasePresenceServiceProvider).watch(),
+      builder: (context, snap) {
+        final online = snap.data ?? const [];
+        if (online.isEmpty) return const SizedBox.shrink();
+        return GestureDetector(
+          onTap: () => _showList(context, ref, online),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            decoration: BoxDecoration(
+              color: dark ? const Color(0xFF1B242B) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF2ECC71), shape: BoxShape.circle)),
+              const SizedBox(width: 7),
+              Text('${online.length} в сети', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showList(BuildContext context, WidgetRef ref, List<PresenceUser> online) {
+    final me = ref.read(appConfigProvider).userId;
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Row(children: [
+              Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF2ECC71), shape: BoxShape.circle)),
+              const SizedBox(width: 9),
+              Text('В системе сейчас — ${online.length}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+          const Divider(height: 1),
+          for (final u in online)
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: AppColors.brand.withValues(alpha: 0.15),
+                child: Text((u.name.isNotEmpty ? u.name[0] : '?').toUpperCase(), style: const TextStyle(color: AppColors.brand, fontWeight: FontWeight.w700)),
+              ),
+              title: Text(u.name.isEmpty ? 'Менеджер' : u.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+              trailing: u.uid == me ? const Text('вы', style: TextStyle(color: AppColors.brand, fontWeight: FontWeight.w700)) : null,
+            ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
 }
 
 /// Переписка одного чата из Firestore + отправка через Cloud Function.
