@@ -12,17 +12,20 @@ const _tealDark = Color(0xFF0E8F82);
 
 /// Bottom sheet создания лида (сохранение в Firestore `leads` с автономером).
 class LeadSheet extends ConsumerStatefulWidget {
-  const LeadSheet({super.key, this.prefillName, this.prefillPhone});
+  const LeadSheet({super.key, this.prefillName, this.prefillPhone, this.existing});
   final String? prefillName;
   final String? prefillPhone;
 
-  static Future<void> show(BuildContext context, {String? name, String? phone}) {
+  /// Если задан — режим редактирования существующего лида.
+  final Lead? existing;
+
+  static Future<void> show(BuildContext context, {String? name, String? phone, Lead? existing}) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => LeadSheet(prefillName: name, prefillPhone: phone),
+      builder: (_) => LeadSheet(prefillName: name, prefillPhone: phone, existing: existing),
     );
   }
 
@@ -41,16 +44,40 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
   int? _nextNumber;
   bool _saving = false;
 
+  bool get _editing => widget.existing != null;
+
   @override
   void initState() {
     super.initState();
-    if (widget.prefillName != null) _name.text = widget.prefillName!;
-    if (widget.prefillPhone != null) _phone.text = widget.prefillPhone!;
+    final ex = widget.existing;
+    if (ex != null) {
+      _name.text = ex.name;
+      _phone.text = ex.phone ?? '';
+      _prepay.text = ex.prepayment != null ? _plainNum(ex.prepayment!) : '';
+      _apptDate = ex.appointmentDate;
+      _apptTime = _parseTod(ex.appointmentTime);
+      _nextNumber = ex.leadNumber;
+    } else {
+      if (widget.prefillName != null) _name.text = widget.prefillName!;
+      if (widget.prefillPhone != null) _phone.text = widget.prefillPhone!;
+      ref.read(leadRepositoryProvider).peekNextNumber().then((n) {
+        if (mounted) setState(() => _nextNumber = n);
+      });
+    }
     _name.addListener(() => setState(() {}));
     _phone.addListener(() => setState(() {}));
-    ref.read(leadRepositoryProvider).peekNextNumber().then((n) {
-      if (mounted) setState(() => _nextNumber = n);
-    });
+  }
+
+  String _plainNum(num v) => v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+  TimeOfDay? _parseTod(String? s) {
+    if (s == null) return null;
+    final p = s.split(':');
+    if (p.length != 2) return null;
+    final h = int.tryParse(p[0]);
+    final m = int.tryParse(p[1]);
+    if (h == null || m == null) return null;
+    return TimeOfDay(hour: h, minute: m);
   }
 
   @override
@@ -78,12 +105,19 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
       prepayment: _prepay.text.trim().isEmpty ? null : num.tryParse(_prepay.text.replaceAll(',', '.').trim()),
     );
     try {
-      final number = await ref.read(leadRepositoryProvider).create(lead, createdBy: ref.read(appConfigProvider).userId);
+      final repo = ref.read(leadRepositoryProvider);
+      final int number;
+      if (_editing) {
+        await repo.update(widget.existing!.id!, lead);
+        number = widget.existing!.leadNumber ?? 0;
+      } else {
+        number = await repo.create(lead, createdBy: ref.read(appConfigProvider).userId);
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Лид №$number сохранён'),
+          content: Text(_editing ? 'Лид №$number обновлён' : 'Лид №$number сохранён'),
           backgroundColor: _teal,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -177,8 +211,12 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Новый лид', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
-                Text(_nextNumber != null ? 'Номер присвоится: №$_nextNumber' : 'Определяем номер…',
+                Text(_editing ? 'Редактирование лида' : 'Новый лид',
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
+                Text(
+                    _nextNumber != null
+                        ? (_editing ? 'Лид №$_nextNumber' : 'Номер присвоится: №$_nextNumber')
+                        : 'Определяем номер…',
                     style: TextStyle(fontSize: 12.5, color: (dark ? Colors.white : Colors.black).withValues(alpha: 0.5))),
               ],
             ),
@@ -373,10 +411,10 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
             onPressed: _saving ? null : _save,
             child: _saving
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
-                : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.check_rounded, size: 21),
-                    SizedBox(width: 8),
-                    Text('Сохранить лид', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.check_rounded, size: 21),
+                    const SizedBox(width: 8),
+                    Text(_editing ? 'Сохранить изменения' : 'Сохранить лид', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   ]),
           ),
         ),

@@ -37,6 +37,22 @@ class Lead {
     return m;
   }
 
+  /// Карта для обновления: очищенные поля удаляются, заполненные — пишутся.
+  /// leadNumber/createdBy/createdAt не трогаем.
+  Map<String, dynamic> toUpdateMap() {
+    final full = <String, dynamic>{
+      'name': name,
+      'phone': phone,
+      'appointmentDate': appointmentDate != null ? Timestamp.fromDate(appointmentDate!) : null,
+      'appointmentTime': appointmentTime,
+      'prepayment': prepayment,
+    };
+    return full.map((k, v) {
+      final empty = v == null || (v is String && v.trim().isEmpty);
+      return MapEntry(k, empty ? FieldValue.delete() : v);
+    });
+  }
+
   static Lead fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
     return Lead(

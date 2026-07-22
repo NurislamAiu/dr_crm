@@ -58,6 +58,16 @@ class LeadRepository {
     }
   }
 
+  /// Обновить лид (номер и служебные поля не трогаем).
+  Future<void> update(String id, Lead lead) async {
+    final data = lead.toUpdateMap();
+    data['updatedAt'] = FieldValue.serverTimestamp();
+    await _db.collection('leads').doc(id).set(data, SetOptions(merge: true));
+  }
+
+  /// Удалить лид.
+  Future<void> delete(String id) => _db.collection('leads').doc(id).delete();
+
   /// Поток списка лидов (по номеру, новые сверху).
   Stream<List<Lead>> watchAll() {
     return _db.collection('leads').orderBy('leadNumber', descending: true).snapshots().map(

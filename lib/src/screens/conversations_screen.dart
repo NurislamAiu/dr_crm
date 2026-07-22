@@ -10,6 +10,7 @@ import 'chat_screen.dart';
 import 'leads_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
+import 'vip_clients_screen.dart';
 
 /// Экран списка диалогов (§18, mobile: отдельный экран списка).
 class ConversationsScreen extends ConsumerStatefulWidget {
@@ -66,6 +67,9 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
                 onLeads: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const LeadsScreen()),
                 ),
+                onVipList: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const VipClientsScreen()),
+                ),
               ),
               Expanded(
                 child: async.when(
@@ -96,10 +100,11 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
 
 /// Верхняя панель списка: заголовок, настройки, встроенная строка поиска.
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.onSearch, required this.onSettings, required this.onLeads});
+  const _TopBar({required this.onSearch, required this.onSettings, required this.onLeads, required this.onVipList});
   final VoidCallback onSearch;
   final VoidCallback onSettings;
   final VoidCallback onLeads;
+  final VoidCallback onVipList;
 
   @override
   Widget build(BuildContext context) {
@@ -115,6 +120,16 @@ class _TopBar extends StatelessWidget {
               const Expanded(
                 child: Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
               ),
+              IconButton.filledTonal(
+                style: IconButton.styleFrom(
+                  backgroundColor: const Color(0xFFE23744).withValues(alpha: 0.12),
+                  foregroundColor: const Color(0xFFE23744),
+                ),
+                icon: const Icon(Icons.workspace_premium_rounded),
+                tooltip: 'VIP-клиенты',
+                onPressed: onVipList,
+              ),
+              const SizedBox(width: 8),
               IconButton.filledTonal(
                 style: IconButton.styleFrom(
                   backgroundColor: AppColors.brand.withValues(alpha: 0.12),

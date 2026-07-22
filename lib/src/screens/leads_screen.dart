@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 
 import '../models/lead.dart';
 import '../state/providers.dart';
+import '../widgets/swipeable_item.dart';
+import 'lead_sheet.dart';
 
 const _teal = Color(0xFF13B0A0);
 const _tealDark = Color(0xFF0E8F82);
@@ -45,7 +47,16 @@ class LeadsScreen extends ConsumerWidget {
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               itemCount: leads.length,
-              itemBuilder: (context, i) => _LeadCard(leads[i]),
+              itemBuilder: (context, i) {
+                final lead = leads[i];
+                return SwipeableItem(
+                  itemKey: ValueKey(lead.id),
+                  title: 'Удалить лид №${lead.leadNumber ?? ''} ${lead.name}?',
+                  onTap: () => LeadSheet.show(context, existing: lead),
+                  onDelete: () => ref.read(leadRepositoryProvider).delete(lead.id!),
+                  child: _LeadCard(lead),
+                );
+              },
             );
           },
         ),

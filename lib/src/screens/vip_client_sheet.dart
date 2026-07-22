@@ -12,17 +12,20 @@ const _vipRedDark = Color(0xFFC42232);
 
 /// Bottom sheet создания VIP-клиента (сохранение в Firestore `clients`).
 class VipClientSheet extends ConsumerStatefulWidget {
-  const VipClientSheet({super.key, this.prefillName, this.prefillPhone});
+  const VipClientSheet({super.key, this.prefillName, this.prefillPhone, this.existing});
   final String? prefillName;
   final String? prefillPhone;
 
-  static Future<void> show(BuildContext context, {String? name, String? phone}) {
+  /// Если задан — режим редактирования существующего клиента.
+  final VipClient? existing;
+
+  static Future<void> show(BuildContext context, {String? name, String? phone, VipClient? existing}) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => VipClientSheet(prefillName: name, prefillPhone: phone),
+      builder: (_) => VipClientSheet(prefillName: name, prefillPhone: phone, existing: existing),
     );
   }
 
@@ -52,11 +55,44 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
 
   bool _saving = false;
 
+  bool get _editing => widget.existing != null;
+
   @override
   void initState() {
     super.initState();
-    if (widget.prefillName != null) _name.text = widget.prefillName!;
-    if (widget.prefillPhone != null) _phone.text = widget.prefillPhone!;
+    final ex = widget.existing;
+    if (ex != null) {
+      // Скрытые в форме поля (clientNumber/arrivalFlight/doctorName/departureFlight)
+      // не редактируются, но сохраняются как есть — см. _save.
+      _name.text = ex.name;
+      _phone.text = ex.phone ?? '';
+      _country.text = ex.country ?? '';
+      _city.text = ex.city ?? '';
+      _hotel.text = ex.hotel ?? '';
+      _driverName.text = ex.driverName ?? '';
+      _driverPhone.text = ex.driverPhone ?? '';
+      _notes.text = ex.notes ?? '';
+      _arrivalDate = ex.arrivalDate;
+      _arrivalTime = _parseTod(ex.arrivalTime);
+      _doctorDate = ex.doctorAppointmentDate;
+      _doctorTime = _parseTod(ex.doctorAppointmentTime);
+      _departureDate = ex.departureDate;
+      _departureTime = _parseTod(ex.departureTime);
+      _status = ex.status;
+    } else {
+      if (widget.prefillName != null) _name.text = widget.prefillName!;
+      if (widget.prefillPhone != null) _phone.text = widget.prefillPhone!;
+    }
+  }
+
+  TimeOfDay? _parseTod(String? s) {
+    if (s == null) return null;
+    final p = s.split(':');
+    if (p.length != 2) return null;
+    final h = int.tryParse(p[0]);
+    final m = int.tryParse(p[1]);
+    if (h == null || m == null) return null;
+    return TimeOfDay(hour: h, minute: m);
   }
 
   @override
@@ -76,7 +112,13 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
       return;
     }
     setState(() => _saving = true);
+    final ex = widget.existing;
     final client = VipClient(
+      // Скрытые поля переносим без изменений при редактировании.
+      clientNumber: ex?.clientNumber,
+      arrivalFlight: ex?.arrivalFlight,
+      doctorName: ex?.doctorName,
+      departureFlight: ex?.departureFlight,
       name: _name.text.trim(),
       phone: _phone.text,
       country: _country.text,
@@ -94,7 +136,12 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
       notes: _notes.text,
     );
     try {
-      await ref.read(vipRepositoryProvider).create(client, createdBy: ref.read(appConfigProvider).userId);
+      final repo = ref.read(vipRepositoryProvider);
+      if (_editing) {
+        await repo.update(ex!.id!, client);
+      } else {
+        await repo.create(client, createdBy: ref.read(appConfigProvider).userId);
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -102,7 +149,7 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
           content: Row(children: [
             const Icon(Icons.check_circle, color: Colors.white, size: 20),
             const SizedBox(width: 10),
-            Expanded(child: Text('VIP-клиент «${client.name}» сохранён')),
+            Expanded(child: Text(_editing ? 'Изменения сохранены' : 'VIP-клиент «${client.name}» сохранён')),
           ]),
           backgroundColor: _vipRed,
           behavior: SnackBarBehavior.floating,
@@ -239,8 +286,9 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Новый VIP-клиент', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
-                Text('Заполните данные по визиту',
+                Text(_editing ? 'Редактирование' : 'Новый VIP-клиент',
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
+                Text(_editing ? 'Измените данные по визиту' : 'Заполните данные по визиту',
                     style: TextStyle(fontSize: 12.5, color: (dark ? Colors.white : Colors.black).withValues(alpha: 0.5))),
               ],
             ),
@@ -451,10 +499,10 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
             onPressed: _saving ? null : _save,
             child: _saving
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
-                : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.check_rounded, size: 21),
-                    SizedBox(width: 8),
-                    Text('Сохранить клиента', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.check_rounded, size: 21),
+                    const SizedBox(width: 8),
+                    Text(_editing ? 'Сохранить изменения' : 'Сохранить клиента', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   ]),
           ),
         ),

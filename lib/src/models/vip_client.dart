@@ -115,6 +115,36 @@ class VipClient {
     return m;
   }
 
+  /// Карта для обновления: очищенные поля удаляются (FieldValue.delete),
+  /// заполненные — перезаписываются. createdBy/createdAt не трогаем.
+  Map<String, dynamic> toUpdateMap() {
+    final full = <String, dynamic>{
+      'clientNumber': clientNumber,
+      'name': name,
+      'phone': phone,
+      'country': country,
+      'city': city,
+      'arrivalDate': arrivalDate != null ? Timestamp.fromDate(arrivalDate!) : null,
+      'arrivalTime': arrivalTime,
+      'arrivalFlight': arrivalFlight,
+      'hotel': hotel,
+      'doctorName': doctorName,
+      'doctorAppointmentDate': doctorAppointmentDate != null ? Timestamp.fromDate(doctorAppointmentDate!) : null,
+      'doctorAppointmentTime': doctorAppointmentTime,
+      'departureDate': departureDate != null ? Timestamp.fromDate(departureDate!) : null,
+      'departureTime': departureTime,
+      'departureFlight': departureFlight,
+      'driverName': driverName,
+      'driverPhone': driverPhone,
+      'status': status.name,
+      'notes': notes,
+    };
+    return full.map((k, v) {
+      final empty = v == null || (v is String && v.trim().isEmpty);
+      return MapEntry(k, empty ? FieldValue.delete() : v);
+    });
+  }
+
   static VipClient fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
     DateTime? ts(dynamic v) => v is Timestamp ? v.toDate() : null;

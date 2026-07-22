@@ -60,10 +60,13 @@ class VipRepository {
 
   /// Обновить существующего клиента (updatedAt обновляется автоматически).
   Future<void> update(String id, VipClient client) async {
-    final data = client.toCreateMap();
+    final data = client.toUpdateMap();
     data['updatedAt'] = FieldValue.serverTimestamp();
     await _col.doc(id).set(data, SetOptions(merge: true));
   }
+
+  /// Удалить клиента.
+  Future<void> delete(String id) => _col.doc(id).delete();
 
   /// Поток списка VIP-клиентов (новые сверху).
   Stream<List<VipClient>> watchAll() {
