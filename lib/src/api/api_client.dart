@@ -40,6 +40,39 @@ class ApiClient {
   }
 
   /// Отметить диалог прочитанным (сброс непрочитанных).
+  /// Список менеджеров организации (только админ).
+  Future<List<Map<String, dynamic>>> listManagers() async {
+    final res = await http.get(_uri('/api/admin/users'), headers: _headers);
+    _ensureOk(res);
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return ((data['users'] as List?) ?? []).cast<Map<String, dynamic>>();
+  }
+
+  /// Создать менеджера (email+имя+пароль+роль).
+  Future<void> createManager({
+    required String email,
+    required String name,
+    required String password,
+    required String role,
+  }) async {
+    final res = await http.post(
+      _uri('/api/admin/users'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'email': email, 'name': name, 'password': password, 'role': role}),
+    );
+    _ensureOk(res);
+  }
+
+  /// Изменить менеджера (имя/роль/активность/пароль — любое поле).
+  Future<void> updateManager(String id, Map<String, dynamic> patch) async {
+    final res = await http.patch(
+      _uri('/api/admin/users/$id'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode(patch),
+    );
+    _ensureOk(res);
+  }
+
   /// Отправка одного сообщения рассылки (сервисные напоминания).
   /// Возвращает {ok, status, error?}. Пауза между контактами — на клиенте.
   Future<Map<String, dynamic>> broadcastSend({

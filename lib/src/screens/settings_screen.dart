@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'managers_screen.dart';
 
 /// Настройки: адреса backend и выход из сессии.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -39,7 +40,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           Text('Менеджер: ${config.userName ?? ''} (${config.role ?? ''})'),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          if (config.role == 'admin')
+            Card(
+              margin: const EdgeInsets.only(bottom: 16),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0x2213B0A0),
+                  child: Icon(Icons.groups_rounded, color: Color(0xFF13B0A0)),
+                ),
+                title: const Text('Менеджеры', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Добавить и настроить доступ команды'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ManagersScreen()),
+                ),
+              ),
+            ),
           _field(_api, 'API base URL'),
           _field(_rt, 'Realtime URL'),
           const SizedBox(height: 8),
