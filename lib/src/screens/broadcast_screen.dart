@@ -157,7 +157,9 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
       _running = true;
       _stop = false;
     });
+    final firebase = ref.read(appConfigProvider).isFirebase;
     final api = ref.read(apiClientProvider);
+    final chat = ref.read(firestoreChatRepositoryProvider);
 
     for (var i = 0; i < rows.length; i++) {
       if (_stop) break;
@@ -182,12 +184,18 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
       });
       final text = tpl.replaceAll('{name}', rows[i].name).replaceAll('{date}', rows[i].date);
       try {
-        final res = await api.broadcastSend(name: rows[i].name, phone: rows[i].phone, text: text);
-        final ok = res['ok'] == true;
-        setState(() {
-          rows[i].status = ok ? _St.sent : _St.failed;
-          rows[i].error = ok ? null : (res['error'] as String?);
-        });
+        if (firebase) {
+          // Firebase-режим: отправка через Cloud Function sendMessage.
+          await chat.sendText(phone: rows[i].phone, text: text, name: rows[i].name);
+          setState(() => rows[i].status = _St.sent);
+        } else {
+          final res = await api.broadcastSend(name: rows[i].name, phone: rows[i].phone, text: text);
+          final ok = res['ok'] == true;
+          setState(() {
+            rows[i].status = ok ? _St.sent : _St.failed;
+            rows[i].error = ok ? null : (res['error'] as String?);
+          });
+        }
       } catch (e) {
         setState(() {
           rows[i].status = _St.failed;
