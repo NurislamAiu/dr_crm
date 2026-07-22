@@ -211,6 +211,34 @@ export const createManager = onCall(async (request) => {
   return { ok: true, uid: user.uid };
 });
 
+/** Изменить менеджера (callable, только админ): имя/роль/активность/сброс пароля. */
+export const updateManager = onCall(async (request) => {
+  const callerUid = request.auth?.uid;
+  if (!callerUid) throw new HttpsError("unauthenticated", "Требуется вход");
+  const caller = await db().collection("users").doc(callerUid).get();
+  const cr = caller.data()?.role;
+  if (cr !== "admin" && cr !== "administrator") throw new HttpsError("permission-denied", "Только админ");
+
+  const data = (request.data ?? {}) as { uid?: string; name?: string; role?: string; isActive?: boolean; password?: string };
+  const uid = (data.uid ?? "").trim();
+  if (!uid) throw new HttpsError("invalid-argument", "uid обязателен");
+  if (uid === callerUid && data.isActive === false) throw new HttpsError("failed-precondition", "Нельзя отключить самого себя");
+
+  const authUpdate: Record<string, unknown> = {};
+  if (data.isActive !== undefined) authUpdate.disabled = !data.isActive;
+  if (data.password && data.password.length >= 6) authUpdate.password = data.password;
+  if (data.name !== undefined) authUpdate.displayName = data.name;
+  if (Object.keys(authUpdate).length > 0) await admin.auth().updateUser(uid, authUpdate);
+
+  const docUpdate: Record<string, unknown> = { updatedAt: ts() };
+  if (data.name !== undefined) docUpdate.name = data.name;
+  if (data.role !== undefined && ["admin", "administrator", "manager", "viewer"].includes(data.role)) docUpdate.role = data.role;
+  if (data.isActive !== undefined) docUpdate.isActive = data.isActive;
+  await db().collection("users").doc(uid).set(docUpdate, { merge: true });
+
+  return { ok: true };
+});
+
 /**
  * Отправка сообщения менеджером (callable, Фаза 2). Требует Firebase Auth.
  * Пишет сообщение в Firestore и отправляет через Wazzup.

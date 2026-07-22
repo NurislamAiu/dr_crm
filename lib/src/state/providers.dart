@@ -5,6 +5,7 @@ import '../api/api_client.dart';
 import '../api/firebase_auth_service.dart';
 import '../api/realtime_client.dart';
 import '../config/app_config.dart';
+import '../data/firebase_manager_service.dart';
 import '../data/firestore_chat_repository.dart';
 import '../data/lead_repository.dart';
 import '../data/presence_service.dart';
@@ -30,6 +31,9 @@ final firestoreChatRepositoryProvider = Provider<FirestoreChatRepository>((_) =>
 
 /// Присутствие менеджеров через Firestore (firebase-режим).
 final firebasePresenceServiceProvider = Provider<FirebasePresenceService>((_) => FirebasePresenceService());
+
+/// Управление менеджерами в firebase-режиме.
+final firebaseManagerServiceProvider = Provider<FirebaseManagerService>((_) => FirebaseManagerService());
 
 /// Онлайн-менеджер (присутствие в системе).
 class OnlineUser {

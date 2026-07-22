@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'firebase_managers_screen.dart';
 import 'managers_screen.dart';
 
 /// Настройки: адреса backend и выход из сессии.
@@ -41,7 +42,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         children: [
           Text('Менеджер: ${config.userName ?? ''} (${config.role ?? ''})'),
           const SizedBox(height: 12),
-          if (config.role == 'admin')
+          if (config.role == 'admin' || config.role == 'administrator')
             Card(
               margin: const EdgeInsets.only(bottom: 16),
               child: ListTile(
@@ -53,7 +54,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: const Text('Добавить и настроить доступ команды'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ManagersScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => config.isFirebase ? const FirebaseManagersScreen() : const ManagersScreen(),
+                  ),
                 ),
               ),
             ),
