@@ -275,7 +275,10 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
   const type = data.type ?? "document";
 
   // Wazzup качает contentUri сам — даём чистую ссылку через нашу функцию.
-  const contentUri = `${REGION_HOST}/mediaContent?path=${encodeURIComponent(mediaPath)}&t=${mediaToken(mediaPath, WAZZUP_WEBHOOK_SECRET.value())}`;
+  // ВАЖНО: слэши в path НЕ кодируем (%2F) — Google GFE отклоняет encoded slashes
+  // до функции, и Wazzup получает «bad response». Наш path безопасен (a-z0-9/_.).
+  const tok = mediaToken(mediaPath, WAZZUP_WEBHOOK_SECRET.value());
+  const contentUri = `${REGION_HOST}/mediaContent?path=${mediaPath}&t=${tok}`;
 
   const crmMessageId = randomUUID();
   const result = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
