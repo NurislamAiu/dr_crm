@@ -121,6 +121,56 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, asy
 });
 
 /**
+ * Разовая инициализация: делает всех существующих Firebase Auth пользователей
+ * админами (создаёт users/{uid}). Работает только если коллекция users пуста.
+ * Защита — секрет вебхука в ?secret=.
+ */
+export const bootstrapAdmins = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, async (req, res) => {
+  if ((req.query.secret as string | undefined) !== WAZZUP_WEBHOOK_SECRET.value()) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  const firestore = db();
+  const existing = await firestore.collection("users").limit(1).get();
+  if (!existing.empty) {
+    res.json({ ok: true, skipped: true, note: "users уже существуют" });
+    return;
+  }
+  const list = await admin.auth().listUsers(100);
+  const created: string[] = [];
+  for (const u of list.users) {
+    await firestore.collection("users").doc(u.uid).set({
+      email: u.email ?? "",
+      name: u.displayName ?? (u.email ?? ""),
+      role: "admin",
+      isActive: true,
+      createdAt: ts(),
+    });
+    created.push(u.email ?? u.uid);
+  }
+  res.json({ ok: true, created });
+});
+
+/** Создать менеджера (callable, только админ): Firebase Auth + users/{uid}. */
+export const createManager = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Требуется вход");
+  const caller = await db().collection("users").doc(uid).get();
+  if (caller.data()?.role !== "admin") throw new HttpsError("permission-denied", "Только админ");
+
+  const data = (request.data ?? {}) as { email?: string; name?: string; password?: string; role?: string };
+  const email = (data.email ?? "").trim();
+  const password = (data.password ?? "").trim();
+  const name = (data.name ?? "").trim();
+  if (!email || password.length < 6) throw new HttpsError("invalid-argument", "email и пароль (от 6) обязательны");
+  const role = ["admin", "manager", "viewer"].includes(data.role ?? "") ? (data.role as string) : "manager";
+
+  const user = await admin.auth().createUser({ email, password, displayName: name || undefined });
+  await db().collection("users").doc(user.uid).set({ email, name, role, isActive: true, createdAt: ts() });
+  return { ok: true, uid: user.uid };
+});
+
+/**
  * Отправка сообщения менеджером (callable, Фаза 2). Требует Firebase Auth.
  * Пишет сообщение в Firestore и отправляет через Wazzup.
  */
