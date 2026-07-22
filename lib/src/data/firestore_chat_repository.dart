@@ -136,9 +136,17 @@ class FirestoreChatRepository {
     final ext = fileName.contains('.') ? fileName.split('.').last : '';
     final path = 'media/out/${DateTime.now().millisecondsSinceEpoch}_$token${ext.isNotEmpty ? '.$ext' : ''}';
     debugPrint('[FB-MEDIA] старт: $kind, ${bytes.length} байт, $contentType → Storage: $path');
+    debugPrint('[FB-MEDIA] bucket=${FirebaseStorage.instance.bucket}');
     final ref = FirebaseStorage.instance.ref(path);
     try {
-      await ref.putData(Uint8List.fromList(bytes), SettableMetadata(contentType: contentType));
+      final task = ref.putData(Uint8List.fromList(bytes), SettableMetadata(contentType: contentType));
+      task.snapshotEvents.listen(
+        (s) => debugPrint('[FB-MEDIA] прогресс: ${s.bytesTransferred}/${s.totalBytes} state=${s.state}'),
+        onError: (e) => debugPrint('[FB-MEDIA] событие-ошибка: $e'),
+      );
+      await task.timeout(const Duration(seconds: 45), onTimeout: () {
+        throw Exception('Таймаут загрузки в Storage (45с) — данные не идут (проверь правила Storage / App Check)');
+      });
       debugPrint('[FB-MEDIA] ✅ загружено в Storage');
     } catch (e) {
       debugPrint('[FB-MEDIA] ❌ ошибка загрузки в Storage: $e');
@@ -148,7 +156,7 @@ class FirestoreChatRepository {
     debugPrint('[FB-MEDIA] URL: $mediaUrl');
 
     final callable = _functions.httpsCallable('sendMedia');
-    final data = <String, dynamic>{'phone': phone, 'mediaUrl': mediaUrl, 'type': kind};
+    final data = <String, dynamic>{'phone': phone, 'mediaPath': path, 'mediaUrl': mediaUrl, 'type': kind};
     if (name != null) data['name'] = name;
     try {
       final res = await callable.call<Map<String, dynamic>>(data);

@@ -3,7 +3,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
-import { randomUUID } from "crypto";
+import { randomUUID, createHmac } from "crypto";
 import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, type WazzupMessage, type WazzupStatus } from "./wazzup";
 
 admin.initializeApp();
@@ -15,6 +15,39 @@ const WAZZUP_CHANNEL_ID = defineSecret("WAZZUP_CHANNEL_ID");
 
 const db = () => admin.firestore();
 const ts = () => admin.firestore.FieldValue.serverTimestamp();
+
+const REGION_HOST = "https://europe-west1-vip-client-manager.cloudfunctions.net";
+
+/** Подпись пути медиа (чтобы mediaContent не отдавал произвольные файлы). */
+function mediaToken(path: string, secret: string): string {
+  return createHmac("sha256", secret).update(path).digest("hex");
+}
+
+/**
+ * Публичная выдача медиа для Wazzup: стримит файл из Storage с чистыми
+ * заголовками (cache-control: public), т.к. прямую ссылку firebasestorage
+ * Wazzup не принимает («Bad response from content store»).
+ */
+export const mediaContent = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, async (req, res) => {
+  const path = String(req.query.path ?? "");
+  const t = String(req.query.t ?? "");
+  if (!path.startsWith("media/") || t !== mediaToken(path, WAZZUP_WEBHOOK_SECRET.value())) {
+    res.status(401).send("unauthorized");
+    return;
+  }
+  try {
+    const file = admin.storage().bucket().file(path);
+    const [meta] = await file.getMetadata();
+    const [buf] = await file.download();
+    res.set("Content-Type", (meta.contentType as string) ?? "application/octet-stream");
+    res.set("Cache-Control", "public, max-age=3600");
+    res.set("Accept-Ranges", "bytes");
+    res.status(200).send(buf);
+  } catch (e) {
+    console.error("mediaContent error", e);
+    res.status(404).send("not found");
+  }
+});
 
 /** Фаза 0 — проверка деплоя. */
 export const ping = onRequest((_req, res) => {
@@ -232,20 +265,24 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
  * Отправка медиа менеджером (callable). Файл уже загружен приложением в
  * Firebase Storage; сюда приходит публичная ссылка mediaUrl.
  */
-export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
+export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, WAZZUP_WEBHOOK_SECRET] }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
-  const data = (request.data ?? {}) as { phone?: string; mediaUrl?: string; type?: string; name?: string };
+  const data = (request.data ?? {}) as { phone?: string; mediaPath?: string; mediaUrl?: string; type?: string; name?: string };
   const chatId = normalizeChatId("whatsapp", String(data.phone ?? ""));
+  const mediaPath = (data.mediaPath ?? "").trim();
   const mediaUrl = (data.mediaUrl ?? "").trim();
-  if (!chatId || !mediaUrl) throw new HttpsError("invalid-argument", "phone и mediaUrl обязательны");
+  if (!chatId || !mediaPath) throw new HttpsError("invalid-argument", "phone и mediaPath обязательны");
   const type = data.type ?? "document";
+
+  // Wazzup качает contentUri сам — даём чистую ссылку через нашу функцию.
+  const contentUri = `${REGION_HOST}/mediaContent?path=${encodeURIComponent(mediaPath)}&t=${mediaToken(mediaPath, WAZZUP_WEBHOOK_SECRET.value())}`;
 
   const crmMessageId = randomUUID();
   const result = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
     channelId: WAZZUP_CHANNEL_ID.value(),
     chatId,
     chatType: "whatsapp",
-    contentUri: mediaUrl,
+    contentUri,
     crmMessageId,
   });
   const messageId = String(result.messageId ?? crmMessageId);
