@@ -40,6 +40,25 @@ class ApiClient {
   }
 
   /// Отметить диалог прочитанным (сброс непрочитанных).
+  /// Отправка одного сообщения рассылки (сервисные напоминания).
+  /// Возвращает {ok, status, error?}. Пауза между контактами — на клиенте.
+  Future<Map<String, dynamic>> broadcastSend({
+    required String name,
+    required String phone,
+    required String text,
+  }) async {
+    final res = await http.post(
+      _uri('/api/broadcast/send'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'name': name, 'phone': phone, 'text': text}),
+    );
+    try {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (_) {
+      return {'ok': false, 'status': 'failed', 'error': 'HTTP ${res.statusCode}'};
+    }
+  }
+
   Future<void> markRead(String conversationId) async {
     final res = await http.post(_uri('/api/conversations/$conversationId/read'), headers: _headers);
     _ensureOk(res);

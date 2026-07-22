@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
+import 'broadcast_screen.dart';
 import 'chat_screen.dart';
 import 'leads_screen.dart';
 import 'search_screen.dart';
@@ -70,6 +71,9 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
                 onVipList: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const VipClientsScreen()),
                 ),
+                onBroadcast: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const BroadcastScreen()),
+                ),
               ),
               Expanded(
                 child: async.when(
@@ -100,11 +104,12 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
 
 /// Верхняя панель списка: заголовок, настройки, встроенная строка поиска.
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.onSearch, required this.onSettings, required this.onLeads, required this.onVipList});
+  const _TopBar({required this.onSearch, required this.onSettings, required this.onLeads, required this.onVipList, required this.onBroadcast});
   final VoidCallback onSearch;
   final VoidCallback onSettings;
   final VoidCallback onLeads;
   final VoidCallback onVipList;
+  final VoidCallback onBroadcast;
 
   @override
   Widget build(BuildContext context) {
@@ -120,6 +125,16 @@ class _TopBar extends StatelessWidget {
               const Expanded(
                 child: Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
               ),
+              IconButton.filledTonal(
+                style: IconButton.styleFrom(
+                  backgroundColor: const Color(0xFFEF9F27).withValues(alpha: 0.15),
+                  foregroundColor: const Color(0xFFC97A0A),
+                ),
+                icon: const Icon(Icons.campaign_rounded),
+                tooltip: 'Рассылка',
+                onPressed: onBroadcast,
+              ),
+              const SizedBox(width: 8),
               IconButton.filledTonal(
                 style: IconButton.styleFrom(
                   backgroundColor: const Color(0xFFE23744).withValues(alpha: 0.12),
