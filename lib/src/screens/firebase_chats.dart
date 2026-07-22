@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import '../data/firestore_chat_repository.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
+import 'lead_sheet.dart';
+import 'vip_client_sheet.dart';
 
 /// Список чатов из Firestore (firebase-режим миграции).
 class FirebaseConversationsScreen extends ConsumerWidget {
@@ -178,8 +180,28 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final repo = ref.watch(firestoreChatRepositoryProvider);
+    final phone = widget.conversation.phone ?? widget.conversation.id;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.conversation.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+      appBar: AppBar(
+        titleSpacing: 0,
+        title: Row(children: [
+          Container(
+            width: 38, height: 38,
+            decoration: const BoxDecoration(shape: BoxShape.circle),
+            clipBehavior: Clip.antiAlias,
+            child: Image.asset(flagAsset(phone), fit: BoxFit.cover),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(widget.conversation.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+        ]),
+        actions: [
+          _pill('ЛИД', Icons.bolt_rounded, const [Color(0xFF20C9B6), Color(0xFF0E8F82)], const Color(0xFF13B0A0),
+              () => LeadSheet.show(context, name: widget.conversation.name, phone: phone)),
+          _pill('VIP', Icons.workspace_premium_rounded, const [Color(0xFFFF5566), Color(0xFFD11E31)], const Color(0xFFE23744),
+              () => VipClientSheet.show(context, name: widget.conversation.name, phone: phone)),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -210,20 +232,71 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     );
   }
 
+  Widget _pill(String label, IconData icon, List<Color> colors, Color glow, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 10),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: colors),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.32), blurRadius: 7, offset: const Offset(0, 2))],
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, color: Colors.white, size: 14),
+              const SizedBox(width: 4),
+              Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5, letterSpacing: 0.4)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _bubble(FsMessage m, bool dark) {
     final out = m.isOutbound;
     final body = m.text ?? (m.type != 'text' ? '[${m.type}]' : '');
+    final time = m.createdAt != null ? DateFormat('HH:mm').format(m.createdAt!) : '';
+    final textColor = out ? Colors.white : (dark ? const Color(0xFFE9EEF0) : const Color(0xFF0E1B22));
+    final metaColor = out ? Colors.white.withValues(alpha: 0.85) : (dark ? Colors.white54 : Colors.black38);
     return Align(
       alignment: out ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 3),
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        padding: const EdgeInsets.fromLTRB(13, 8, 11, 7),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
         decoration: BoxDecoration(
-          color: out ? AppColors.brand : (dark ? const Color(0xFF1B242B) : Colors.white),
-          borderRadius: BorderRadius.circular(16),
+          gradient: out ? brandGradient : null,
+          color: out ? null : (dark ? const Color(0xFF1B242B) : Colors.white),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(out ? 18 : 6),
+            bottomRight: Radius.circular(out ? 6 : 18),
+          ),
+          boxShadow: [BoxShadow(color: out ? AppColors.brand.withValues(alpha: 0.22) : Colors.black.withValues(alpha: dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2))],
         ),
-        child: Text(body, style: TextStyle(color: out ? Colors.white : (dark ? Colors.white : const Color(0xFF0E1B22)), fontSize: 15.5)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+          Text(body, style: TextStyle(color: textColor, fontSize: 15.5, height: 1.3)),
+          const SizedBox(height: 2),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
+            if (out) ...[
+              const SizedBox(width: 3),
+              Icon(
+                m.status == 'read' ? Icons.done_all : (m.status == 'delivered' ? Icons.done_all : Icons.check),
+                size: 13,
+                color: m.status == 'read' ? const Color(0xFFBEEFFF) : metaColor,
+              ),
+            ],
+          ]),
+        ]),
       ),
     );
   }
