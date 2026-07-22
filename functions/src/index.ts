@@ -1,18 +1,171 @@
-import { onRequest } from "firebase-functions/v2/https";
+import { onRequest, onCall, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
+import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
+import { randomUUID } from "crypto";
+import { normalizeChatId, parseDateMs, wazzupSendText, type WazzupMessage, type WazzupStatus } from "./wazzup";
 
 admin.initializeApp();
-
-// Регион ближе к клиенту/Wazzup; ограничиваем экземпляры (защита от «дорогих»
-// всплесков — важно для контроля счёта на Blaze).
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
 
-/**
- * Фаза 0 — проверка, что деплой Cloud Functions работает.
- * Логику вебхука Wazzup, отправки и медиа добавим в Фазе 1 (прод на Mac пока
- * не трогаем; вебхук Wazzup всё ещё указывает на Mac).
- */
+const WAZZUP_WEBHOOK_SECRET = defineSecret("WAZZUP_WEBHOOK_SECRET");
+const WAZZUP_API_KEY = defineSecret("WAZZUP_API_KEY");
+const WAZZUP_CHANNEL_ID = defineSecret("WAZZUP_CHANNEL_ID");
+
+const db = () => admin.firestore();
+const ts = () => admin.firestore.FieldValue.serverTimestamp();
+
+/** Фаза 0 — проверка деплоя. */
 export const ping = onRequest((_req, res) => {
   res.json({ ok: true, service: "vip-crm-functions", ts: new Date().toISOString() });
+});
+
+/**
+ * Приём вебхуков Wazzup → Firestore (Фаза 1).
+ * Модель: contacts/{chatId}, conversations/{chatId}, messages/{messageId}.
+ * messageId = ключ документа → авто-дедуп при повторной доставке.
+ * ВНИМАНИЕ: вебхук Wazzup ещё указывает на Mac — эта функция тестируется
+ * изолированно, пока не переключим (Фаза 3).
+ */
+export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, async (req, res) => {
+  const provided =
+    (req.query.secret as string | undefined) ??
+    (req.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "");
+  if (provided !== WAZZUP_WEBHOOK_SECRET.value()) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as { test?: boolean; messages?: WazzupMessage[]; statuses?: WazzupStatus[] };
+  if (body.test === true) {
+    res.json({ ok: true });
+    return;
+  }
+
+  const firestore = db();
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const statuses = Array.isArray(body.statuses) ? body.statuses : [];
+
+  try {
+    for (const m of messages) {
+      const chatType = m.chatType ?? "whatsapp";
+      const chatId = normalizeChatId(chatType, String(m.chatId ?? ""));
+      if (!chatId || !m.messageId) continue;
+
+      const inbound = !m.isEcho;
+      const type = m.type ?? "text";
+      const text = m.text ?? null;
+      const preview = text && text.length > 0 ? text : `[${type}]`;
+      const ms = parseDateMs(m.dateTime);
+      const createdAt = ms ? admin.firestore.Timestamp.fromMillis(ms) : ts();
+
+      const batch = firestore.batch();
+
+      // Контакт (идентификация по номеру — имя = номер, как в текущем CRM).
+      batch.set(
+        firestore.collection("contacts").doc(chatId),
+        { phone: chatId, name: `+${chatId}`, chatType, channelId: m.channelId ?? null, lastMessageAt: createdAt, updatedAt: ts() },
+        { merge: true },
+      );
+
+      // Диалог (один на контакт). unreadCount растёт только на входящих.
+      const conv: Record<string, unknown> = {
+        contactId: chatId,
+        phone: chatId,
+        name: `+${chatId}`,
+        chatType,
+        channelId: m.channelId ?? null,
+        status: "open",
+        lastMessageAt: createdAt,
+        lastMessagePreview: preview,
+        updatedAt: ts(),
+      };
+      if (inbound) conv.unreadCount = admin.firestore.FieldValue.increment(1);
+      batch.set(firestore.collection("conversations").doc(chatId), conv, { merge: true });
+
+      // Сообщение (ключ = messageId → идемпотентно).
+      batch.set(
+        firestore.collection("messages").doc(String(m.messageId)),
+        {
+          conversationId: chatId,
+          chatId,
+          externalMessageId: m.messageId,
+          direction: inbound ? "inbound" : "outbound",
+          type,
+          text,
+          contentUri: m.contentUri ?? null,
+          status: inbound ? "received" : (m.status ?? "sent"),
+          authorName: m.authorName ?? null,
+          createdAt,
+        },
+        { merge: true },
+      );
+
+      await batch.commit();
+    }
+
+    // Статусы доставки/прочтения — обновляем сообщение по messageId.
+    for (const s of statuses) {
+      if (!s.messageId || !s.status) continue;
+      await firestore
+        .collection("messages")
+        .doc(String(s.messageId))
+        .set({ status: s.status, statusAt: ts() }, { merge: true });
+    }
+
+    res.json({ ok: true, messages: messages.length, statuses: statuses.length });
+  } catch (e) {
+    console.error("wazzupWebhook error", e);
+    res.status(500).json({ error: "internal" });
+  }
+});
+
+/**
+ * Отправка сообщения менеджером (callable, Фаза 2). Требует Firebase Auth.
+ * Пишет сообщение в Firestore и отправляет через Wazzup.
+ */
+export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
+  const data = (request.data ?? {}) as { phone?: string; text?: string; name?: string };
+  const chatId = normalizeChatId("whatsapp", String(data.phone ?? ""));
+  const text = (data.text ?? "").trim();
+  if (!chatId || !text) throw new HttpsError("invalid-argument", "phone и text обязательны");
+
+  const crmMessageId = randomUUID();
+  const result = await wazzupSendText(WAZZUP_API_KEY.value(), {
+    channelId: WAZZUP_CHANNEL_ID.value(),
+    chatId,
+    chatType: "whatsapp",
+    text,
+    crmMessageId,
+  });
+  const messageId = String(result.messageId ?? crmMessageId);
+  const name = (data.name ?? "").trim() || `+${chatId}`;
+  const firestore = db();
+
+  await firestore.collection("messages").doc(messageId).set(
+    {
+      conversationId: chatId,
+      chatId,
+      externalMessageId: result.messageId ?? null,
+      direction: "outbound",
+      type: "text",
+      text,
+      status: "sent",
+      authorId: request.auth.uid,
+      crmMessageId,
+      createdAt: ts(),
+    },
+    { merge: true },
+  );
+  await firestore.collection("contacts").doc(chatId).set(
+    { phone: chatId, name, chatType: "whatsapp", lastMessageAt: ts(), updatedAt: ts() },
+    { merge: true },
+  );
+  await firestore.collection("conversations").doc(chatId).set(
+    { contactId: chatId, phone: chatId, name, chatType: "whatsapp", status: "open", unreadCount: 0, lastMessageAt: ts(), lastMessagePreview: text, updatedAt: ts() },
+    { merge: true },
+  );
+
+  return { ok: true, messageId };
 });
