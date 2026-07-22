@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -23,6 +24,9 @@ const _defaultVariants = <String>[
 ];
 
 const _delaySeconds = 20;
+
+/// Как выбирать вариант текста для каждого контакта.
+enum _Mode { rotate, random, single }
 
 enum _St { pending, sending, sent, failed }
 
@@ -55,6 +59,10 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
   bool _stop = false;
   int _countdown = 0;
   Timer? _timer;
+
+  _Mode _mode = _Mode.rotate;
+  int _singleIndex = 0; // выбранный вариант в режиме «Один»
+  final _rnd = Random();
 
   @override
   void dispose() {
@@ -114,6 +122,10 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
     final rows = _parse();
     final variants = _activeVariants();
     if (rows.isEmpty || variants.isEmpty) return;
+    // В режиме «Один» берём выбранный вариант (если пуст — не стартуем).
+    final single = _mode == _Mode.single ? _variants[_singleIndex].text : null;
+    if (_mode == _Mode.single && (single == null || single.trim().isEmpty)) return;
+
     setState(() {
       _rows = rows;
       _running = true;
@@ -123,12 +135,26 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
 
     for (var i = 0; i < rows.length; i++) {
       if (_stop) break;
-      final vIndex = i % variants.length;
+      final String tpl;
+      final int vNum;
+      switch (_mode) {
+        case _Mode.single:
+          tpl = single!;
+          vNum = _singleIndex + 1;
+        case _Mode.random:
+          final k = _rnd.nextInt(variants.length);
+          tpl = variants[k];
+          vNum = k + 1;
+        case _Mode.rotate:
+          final k = i % variants.length;
+          tpl = variants[k];
+          vNum = k + 1;
+      }
       setState(() {
         rows[i].status = _St.sending;
-        rows[i].variant = vIndex + 1;
+        rows[i].variant = vNum;
       });
-      final text = variants[vIndex].replaceAll('{name}', rows[i].name).replaceAll('{date}', rows[i].date);
+      final text = tpl.replaceAll('{name}', rows[i].name).replaceAll('{date}', rows[i].date);
       try {
         final res = await api.broadcastSend(name: rows[i].name, phone: rows[i].phone, text: text);
         final ok = res['ok'] == true;
@@ -216,6 +242,34 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
         ]),
       );
 
+  bool _canSend(int parsedCount) {
+    if (parsedCount == 0) return false;
+    if (_mode == _Mode.single) {
+      return _singleIndex < _variants.length && _variants[_singleIndex].text.trim().isNotEmpty;
+    }
+    return _activeVariants().isNotEmpty;
+  }
+
+  Widget _modeChips() {
+    const items = [(_Mode.rotate, 'По очереди'), (_Mode.random, 'Рандом'), (_Mode.single, 'Один')];
+    return Wrap(
+      spacing: 8,
+      children: [
+        for (final (m, label) in items)
+          ChoiceChip(
+            label: Text(label),
+            selected: _mode == m,
+            onSelected: _running ? null : (_) => setState(() => _mode = m),
+            selectedColor: AppColors.brand.withValues(alpha: 0.18),
+            labelStyle: TextStyle(
+              fontWeight: _mode == m ? FontWeight.w700 : FontWeight.w500,
+              color: _mode == m ? AppColors.brand : null,
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _variantsCard(bool dark) {
     final sec = context.semantic.textSecondary;
     return Container(
@@ -237,14 +291,35 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           Expanded(child: Text('Тексты — ${_variants.length} вар.', style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700))),
         ]),
         const SizedBox(height: 4),
-        Text('Каждому контакту уходит следующий вариант по кругу. Переменные: {name}, {date}',
-            style: TextStyle(fontSize: 12, color: sec)),
+        Text('Переменные: {name}, {date}', style: TextStyle(fontSize: 12, color: sec)),
         const SizedBox(height: 10),
+        _modeChips(),
+        const SizedBox(height: 6),
+        Text(
+          switch (_mode) {
+            _Mode.single => 'Всем уходит один выбранный вариант (отметьте его ниже).',
+            _Mode.random => 'Каждому — случайный вариант из списка.',
+            _Mode.rotate => 'Каждому — следующий вариант по кругу.',
+          },
+          style: TextStyle(fontSize: 12, color: sec),
+        ),
+        const SizedBox(height: 12),
         for (var i = 0; i < _variants.length; i++)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
+                if (_mode == _Mode.single) ...[
+                  GestureDetector(
+                    onTap: _running ? null : () => setState(() => _singleIndex = i),
+                    child: Icon(
+                      _singleIndex == i ? Icons.radio_button_checked : Icons.radio_button_off,
+                      size: 19,
+                      color: _singleIndex == i ? AppColors.brand : Colors.grey,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(7)),
@@ -334,7 +409,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                 )
               : FilledButton.icon(
                   style: FilledButton.styleFrom(backgroundColor: AppColors.brand, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  onPressed: (parsedCount > 0 && _activeVariants().isNotEmpty) ? _start : null,
+                  onPressed: _canSend(parsedCount) ? _start : null,
                   icon: const Icon(Icons.send_rounded),
                   label: Text('Отправить рассылку ($parsedCount)', style: const TextStyle(fontWeight: FontWeight.w700)),
                 ),
