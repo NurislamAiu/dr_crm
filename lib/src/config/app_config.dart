@@ -13,7 +13,7 @@ class AppConfig extends ChangeNotifier {
     this.userId,
     this.userName,
     this.role,
-    this.backend = 'mac',
+    this.backend = 'firebase',
   });
 
   String apiBaseUrl;
@@ -45,7 +45,7 @@ class AppConfig extends ChangeNotifier {
       userId: prefs.getString(_kUserId),
       userName: prefs.getString(_kUserName),
       role: prefs.getString(_kRole),
-      backend: prefs.getString(_kBackend) ?? 'mac',
+      backend: prefs.getString(_kBackend) ?? 'firebase',
     );
   }
 
