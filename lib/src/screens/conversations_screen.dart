@@ -6,12 +6,8 @@ import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
-import 'broadcast_screen.dart';
 import 'chat_screen.dart';
-import 'leads_screen.dart';
 import 'search_screen.dart';
-import 'settings_screen.dart';
-import 'vip_clients_screen.dart';
 
 /// Экран списка диалогов (§18, mobile: отдельный экран списка).
 class ConversationsScreen extends ConsumerStatefulWidget {
@@ -62,18 +58,6 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
                 onSearch: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const SearchScreen()),
                 ),
-                onSettings: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                ),
-                onLeads: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const LeadsScreen()),
-                ),
-                onVipList: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const VipClientsScreen()),
-                ),
-                onBroadcast: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const BroadcastScreen()),
-                ),
               ),
               Expanded(
                 child: async.when(
@@ -102,65 +86,21 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
   }
 }
 
-/// Верхняя панель списка: заголовок, настройки, встроенная строка поиска.
+/// Верхняя панель списка: заголовок + встроенная строка поиска.
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.onSearch, required this.onSettings, required this.onLeads, required this.onVipList, required this.onBroadcast});
+  const _TopBar({required this.onSearch});
   final VoidCallback onSearch;
-  final VoidCallback onSettings;
-  final VoidCallback onLeads;
-  final VoidCallback onVipList;
-  final VoidCallback onBroadcast;
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final fieldBg = dark ? const Color(0xFF1B242B) : Colors.white;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
-              ),
-              IconButton.filledTonal(
-                style: IconButton.styleFrom(
-                  backgroundColor: const Color(0xFFEF9F27).withValues(alpha: 0.15),
-                  foregroundColor: const Color(0xFFC97A0A),
-                ),
-                icon: const Icon(Icons.campaign_rounded),
-                tooltip: 'Рассылка',
-                onPressed: onBroadcast,
-              ),
-              const SizedBox(width: 8),
-              IconButton.filledTonal(
-                style: IconButton.styleFrom(
-                  backgroundColor: const Color(0xFFE23744).withValues(alpha: 0.12),
-                  foregroundColor: const Color(0xFFE23744),
-                ),
-                icon: const Icon(Icons.workspace_premium_rounded),
-                tooltip: 'VIP-клиенты',
-                onPressed: onVipList,
-              ),
-              const SizedBox(width: 8),
-              IconButton.filledTonal(
-                style: IconButton.styleFrom(
-                  backgroundColor: AppColors.brand.withValues(alpha: 0.12),
-                  foregroundColor: AppColors.brand,
-                ),
-                icon: const Icon(Icons.bolt_rounded),
-                tooltip: 'Лиды',
-                onPressed: onLeads,
-              ),
-              const SizedBox(width: 8),
-              IconButton.filledTonal(
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: onSettings,
-              ),
-            ],
-          ),
+          const Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
           const SizedBox(height: 10),
           GestureDetector(
             onTap: onSearch,

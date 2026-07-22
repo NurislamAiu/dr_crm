@@ -6,7 +6,7 @@ import 'firebase_options.dart';
 import 'src/config/app_config.dart';
 import 'src/state/providers.dart';
 import 'src/theme/app_theme.dart';
-import 'src/screens/conversations_screen.dart';
+import 'src/screens/main_shell.dart';
 import 'src/screens/login_screen.dart';
 
 Future<void> main() async {
@@ -62,7 +62,7 @@ class _Root extends ConsumerWidget {
         if (!config.isAuthenticated) {
           return const LoginScreen();
         }
-        return const ConversationsScreen();
+        return const MainShell();
       },
     );
   }
