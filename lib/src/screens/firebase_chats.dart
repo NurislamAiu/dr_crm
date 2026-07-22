@@ -1,9 +1,15 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:record/record.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../data/firestore_chat_repository.dart';
 import '../state/providers.dart';
@@ -145,17 +151,94 @@ class FirebaseChatScreen extends ConsumerStatefulWidget {
 class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   final _input = TextEditingController();
   bool _sending = false;
+  bool _hasText = false;
+
+  final AudioRecorder _recorder = AudioRecorder();
+  bool _recording = false;
+  int _recSeconds = 0;
+  Timer? _recTimer;
+  String? _recPath;
 
   @override
   void initState() {
     super.initState();
+    _input.addListener(() {
+      final has = _input.text.trim().isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+    });
     ref.read(firestoreChatRepositoryProvider).markRead(widget.conversation.id).catchError((_) {});
   }
 
   @override
   void dispose() {
+    _recTimer?.cancel();
+    _recorder.dispose();
     _input.dispose();
     super.dispose();
+  }
+
+  Future<void> _startRec() async {
+    try {
+      if (!await _recorder.hasPermission()) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Нет доступа к микрофону')));
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+      _recPath = path;
+      setState(() {
+        _recording = true;
+        _recSeconds = 0;
+      });
+      _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() => _recSeconds++);
+      });
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Запись не началась: $e')));
+    }
+  }
+
+  Future<void> _stopRecAndSend() async {
+    _recTimer?.cancel();
+    final tooShort = _recSeconds < 1;
+    String? path;
+    try {
+      path = await _recorder.stop();
+    } catch (_) {}
+    setState(() => _recording = false);
+    if (path == null || tooShort) {
+      if (tooShort && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Слишком коротко')));
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final bytes = await File(path).readAsBytes();
+      await ref.read(firestoreChatRepositoryProvider).sendMedia(
+            phone: widget.conversation.phone ?? widget.conversation.id,
+            bytes: bytes,
+            fileName: 'voice.m4a',
+            contentType: 'audio/mp4',
+            kind: 'audio',
+            name: widget.conversation.name,
+          );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Голосовое не отправлено: $e')));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _cancelRec() async {
+    _recTimer?.cancel();
+    try {
+      await _recorder.stop();
+      if (_recPath != null) {
+        final f = File(_recPath!);
+        if (await f.exists()) await f.delete();
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _recording = false);
   }
 
   Future<void> _pickAndSend() async {
@@ -351,7 +434,8 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
           if (isImage) _mediaImage(m.media!),
-          if (hasMedia && !isImage) _mediaCard(m, out),
+          if (hasMedia && !isImage && m.type == 'audio') _FbVoicePlayer(url: m.media!, onGradient: out),
+          if (hasMedia && !isImage && m.type != 'audio') _mediaCard(m, out),
           if (body.isNotEmpty)
             Padding(
               padding: EdgeInsets.only(top: hasMedia ? 6 : 0, left: isImage ? 8 : 0, right: isImage ? 8 : 0),
@@ -433,37 +517,157 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
       child: Container(
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
         color: dark ? const Color(0xFF12191E) : Colors.white,
-        child: Row(children: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded, color: AppColors.brand),
-            onPressed: _sending ? null : _pickAndSend,
-          ),
-          Expanded(
-            child: TextField(
-              controller: _input,
-              minLines: 1, maxLines: 5,
-              decoration: InputDecoration(
-                hintText: 'Сообщение…',
-                filled: true,
-                fillColor: dark ? const Color(0xFF232E36) : const Color(0xFFEDF2F2),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(22), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: _sending ? null : _send,
-            child: Container(
-              width: 46, height: 46,
-              decoration: const BoxDecoration(color: AppColors.brand, shape: BoxShape.circle),
-              child: _sending
-                  ? const Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.send_rounded, color: Colors.white),
-            ),
-          ),
-        ]),
+        child: _recording ? _recBar() : _inputBar(dark),
       ),
+    );
+  }
+
+  Widget _recBar() {
+    final m = (_recSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (_recSeconds % 60).toString().padLeft(2, '0');
+    return Row(children: [
+      IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: _cancelRec),
+      Container(width: 10, height: 10, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
+      const SizedBox(width: 8),
+      Text('$m:$s', style: const TextStyle(fontWeight: FontWeight.w600)),
+      const Spacer(),
+      const Text('Запись…', style: TextStyle(color: Colors.grey)),
+      const SizedBox(width: 10),
+      GestureDetector(
+        onTap: _sending ? null : _stopRecAndSend,
+        child: Container(
+          width: 46, height: 46,
+          decoration: const BoxDecoration(color: AppColors.brand, shape: BoxShape.circle),
+          child: const Icon(Icons.send_rounded, color: Colors.white),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _inputBar(bool dark) {
+    return Row(children: [
+      IconButton(
+        icon: const Icon(Icons.add_circle_outline_rounded, color: AppColors.brand),
+        onPressed: _sending ? null : _pickAndSend,
+      ),
+      Expanded(
+        child: TextField(
+          controller: _input,
+          minLines: 1, maxLines: 5,
+          decoration: InputDecoration(
+            hintText: 'Сообщение…',
+            filled: true,
+            fillColor: dark ? const Color(0xFF232E36) : const Color(0xFFEDF2F2),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(22), borderSide: BorderSide.none),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          ),
+        ),
+      ),
+      const SizedBox(width: 8),
+      GestureDetector(
+        onTap: _sending ? null : (_hasText ? _send : _startRec),
+        child: Container(
+          width: 46, height: 46,
+          decoration: const BoxDecoration(color: AppColors.brand, shape: BoxShape.circle),
+          child: _sending
+              ? const Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : Icon(_hasText ? Icons.send_rounded : Icons.mic_rounded, color: Colors.white),
+        ),
+      ),
+    ]);
+  }
+}
+
+/// Компактный проигрыватель голосового в firebase-режиме (just_audio).
+class _FbVoicePlayer extends StatefulWidget {
+  const _FbVoicePlayer({required this.url, required this.onGradient});
+  final String url;
+  final bool onGradient;
+
+  @override
+  State<_FbVoicePlayer> createState() => _FbVoicePlayerState();
+}
+
+class _FbVoicePlayerState extends State<_FbVoicePlayer> {
+  final _player = AudioPlayer();
+  bool _prepared = false;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    if (!_prepared) {
+      setState(() => _loading = true);
+      try {
+        await _player.setUrl(widget.url);
+        _prepared = true;
+      } catch (_) {
+        if (mounted) {
+          setState(() => _loading = false);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Не удалось воспроизвести')));
+        }
+        return;
+      }
+      if (mounted) setState(() => _loading = false);
+    }
+    if (_player.playing) {
+      await _player.pause();
+    } else {
+      if (_player.processingState == ProcessingState.completed) await _player.seek(Duration.zero);
+      _player.play();
+    }
+    if (mounted) setState(() {});
+  }
+
+  String _fmt(Duration d) => '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final og = widget.onGradient;
+    final circleBg = og ? Colors.white : AppColors.brand;
+    final circleFg = og ? AppColors.brand : Colors.white;
+    final active = og ? Colors.white : AppColors.brand;
+    final muted = og ? Colors.white.withValues(alpha: 0.35) : AppColors.brand.withValues(alpha: 0.3);
+    final timeColor = og ? Colors.white.withValues(alpha: 0.85) : Colors.grey.shade600;
+
+    return SizedBox(
+      width: 210,
+      child: Row(children: [
+        GestureDetector(
+          onTap: _toggle,
+          child: Container(
+            width: 38, height: 38,
+            decoration: BoxDecoration(color: circleBg, shape: BoxShape.circle),
+            alignment: Alignment.center,
+            child: _loading
+                ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: circleFg))
+                : Icon(_player.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: circleFg, size: 22),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: StreamBuilder<Duration>(
+            stream: _player.positionStream,
+            builder: (context, snap) {
+              final pos = snap.data ?? Duration.zero;
+              final dur = _player.duration ?? Duration.zero;
+              final progress = dur.inMilliseconds == 0 ? 0.0 : (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(value: progress, minHeight: 4, backgroundColor: muted, color: active),
+                ),
+                const SizedBox(height: 5),
+                Text(_player.playing || pos > Duration.zero ? _fmt(pos) : _fmt(dur), style: TextStyle(fontSize: 11, color: timeColor)),
+              ]);
+            },
+          ),
+        ),
+      ]),
     );
   }
 }
