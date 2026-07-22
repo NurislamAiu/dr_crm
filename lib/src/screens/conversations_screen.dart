@@ -86,6 +86,68 @@ class _ConversationsScreenState extends ConsumerState<ConversationsScreen> {
   }
 }
 
+/// Индикатор «кто сейчас в системе» (presence). Тап — список имён.
+class _OnlineBadge extends ConsumerWidget {
+  const _OnlineBadge();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final online = ref.watch(presenceProvider);
+    if (online.isEmpty) return const SizedBox.shrink();
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () => _showList(context, ref, online),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+        decoration: BoxDecoration(
+          color: dark ? const Color(0xFF1B242B) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF2ECC71), shape: BoxShape.circle)),
+          const SizedBox(width: 7),
+          Text('${online.length} в сети', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+        ]),
+      ),
+    );
+  }
+
+  void _showList(BuildContext context, WidgetRef ref, List<OnlineUser> online) {
+    final me = ref.read(appConfigProvider).userId;
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Row(children: [
+              Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF2ECC71), shape: BoxShape.circle)),
+              const SizedBox(width: 9),
+              Text('В системе сейчас — ${online.length}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+          const Divider(height: 1),
+          for (final u in online)
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: AppColors.brand.withValues(alpha: 0.15),
+                child: Text(
+                  (u.userName.isNotEmpty ? u.userName[0] : '?').toUpperCase(),
+                  style: const TextStyle(color: AppColors.brand, fontWeight: FontWeight.w700),
+                ),
+              ),
+              title: Text(u.userName.isEmpty ? 'Менеджер' : u.userName, style: const TextStyle(fontWeight: FontWeight.w600)),
+              trailing: u.userId == me ? const Text('вы', style: TextStyle(color: AppColors.brand, fontWeight: FontWeight.w700)) : null,
+            ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
+}
+
 /// Верхняя панель списка: заголовок + встроенная строка поиска.
 class _TopBar extends StatelessWidget {
   const _TopBar({required this.onSearch});
@@ -100,7 +162,12 @@ class _TopBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
+          Row(children: [
+            const Expanded(
+              child: Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
+            ),
+            const _OnlineBadge(),
+          ]),
           const SizedBox(height: 10),
           GestureDetector(
             onTap: onSearch,

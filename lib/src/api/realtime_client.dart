@@ -33,6 +33,7 @@ class RealtimeClient {
     'message.status.updated',
     'channel.state.updated',
     'notification.created',
+    'presence.updated',
   ];
 
   void connect() {

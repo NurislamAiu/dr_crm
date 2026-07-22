@@ -52,11 +52,38 @@ io.use((socket, next) => {
   next();
 });
 
+// --- Присутствие менеджеров (кто сейчас в системе) ---
+// orgId -> (userId -> { name, count }) ; count = число активных сокетов юзера.
+const presence = new Map<string, Map<string, { name: string; count: number }>>();
+
+function onlineUsers(orgId: string): { userId: string; userName: string }[] {
+  const m = presence.get(orgId);
+  if (!m) return [];
+  return [...m.entries()].map(([userId, v]) => ({ userId, userName: v.name }));
+}
+
+function broadcastPresence(orgId: string): void {
+  io.to(`org:${orgId}`).emit("presence.updated", {
+    event: "presence.updated",
+    organizationId: orgId,
+    payload: { users: onlineUsers(orgId) },
+    ts: new Date().toISOString(),
+  });
+}
+
 io.on("connection", (socket) => {
   const orgId = socket.data.organizationId as string;
   const userId = socket.data.userId as string | undefined;
   socket.join(`org:${orgId}`);
   if (userId) socket.join(`user:${userId}`);
+
+  if (userId) {
+    const m = presence.get(orgId) ?? new Map<string, { name: string; count: number }>();
+    const cur = m.get(userId);
+    m.set(userId, { name: (socket.data.userName as string) || "", count: (cur?.count ?? 0) + 1 });
+    presence.set(orgId, m);
+    broadcastPresence(orgId); // включая только что подключившегося
+  }
   logger.info("realtime: клиент подключён", { orgId, userId, socketId: socket.id });
 
   // Клиент присоединяется к комнате конкретного диалога (только своей орг).
@@ -80,6 +107,15 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    if (userId) {
+      const m = presence.get(orgId);
+      const cur = m?.get(userId);
+      if (m && cur) {
+        if (cur.count <= 1) m.delete(userId);
+        else m.set(userId, { name: cur.name, count: cur.count - 1 });
+        broadcastPresence(orgId);
+      }
+    }
     logger.info("realtime: клиент отключён", { socketId: socket.id });
   });
 });

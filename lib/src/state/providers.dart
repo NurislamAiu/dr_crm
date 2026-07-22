@@ -19,6 +19,35 @@ final vipRepositoryProvider = Provider<VipRepository>((_) => VipRepository());
 /// Репозиторий лидов (Firestore, коллекция leads).
 final leadRepositoryProvider = Provider<LeadRepository>((_) => LeadRepository());
 
+/// Онлайн-менеджер (присутствие в системе).
+class OnlineUser {
+  const OnlineUser(this.userId, this.userName);
+  final String userId;
+  final String userName;
+}
+
+/// Кто сейчас в системе (обновляется realtime-событием presence.updated).
+class PresenceNotifier extends Notifier<List<OnlineUser>> {
+  StreamSubscription<RealtimeEvent>? _sub;
+
+  @override
+  List<OnlineUser> build() {
+    final rt = ref.watch(realtimeClientProvider);
+    _sub = rt.events.listen((e) {
+      if (e.event != 'presence.updated') return;
+      final users = (e.payload['users'] as List?) ?? const [];
+      state = [
+        for (final u in users)
+          if (u is Map) OnlineUser((u['userId'] ?? '').toString(), (u['userName'] ?? '').toString()),
+      ];
+    });
+    ref.onDispose(() => _sub?.cancel());
+    return const [];
+  }
+}
+
+final presenceProvider = NotifierProvider<PresenceNotifier, List<OnlineUser>>(PresenceNotifier.new);
+
 final realtimeClientProvider = Provider<RealtimeClient>((ref) {
   final client = RealtimeClient(ref.watch(appConfigProvider));
   client.connect();
