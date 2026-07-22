@@ -4,24 +4,38 @@ import 'package:intl/intl.dart';
 
 import '../models/vip_client.dart';
 import '../state/providers.dart';
-import '../widgets/swipeable_item.dart';
+import 'archive_actions.dart';
 import 'vip_client_sheet.dart';
 
 const _vipRed = Color(0xFFE23744);
 const _vipRedDark = Color(0xFFC42232);
 
 /// Экран списка VIP-клиентов (реальное время из Firestore, коллекция `clients`).
-class VipClientsScreen extends ConsumerWidget {
+class VipClientsScreen extends ConsumerStatefulWidget {
   const VipClientsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<VipClientsScreen> createState() => _VipClientsScreenState();
+}
+
+class _VipClientsScreenState extends ConsumerState<VipClientsScreen> {
+  bool _archive = false;
+
+  @override
+  Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final stream = ref.watch(vipRepositoryProvider).watchAll();
+    final repo = ref.watch(vipRepositoryProvider);
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 20,
-        title: const Text('VIP-клиенты', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text(_archive ? 'Архив VIP' : 'VIP-клиенты', style: const TextStyle(fontWeight: FontWeight.w800)),
+        actions: [
+          IconButton(
+            icon: Icon(_archive ? Icons.list_alt_rounded : Icons.archive_outlined),
+            tooltip: _archive ? 'Активные' : 'Архив',
+            onPressed: () => setState(() => _archive = !_archive),
+          ),
+        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -32,26 +46,33 @@ class VipClientsScreen extends ConsumerWidget {
           ),
         ),
         child: StreamBuilder<List<VipClient>>(
-          stream: stream,
+          stream: repo.watchAll(),
           builder: (context, snap) {
             if (snap.hasError) {
               return _Message(icon: Icons.cloud_off, title: 'Ошибка загрузки', subtitle: '${snap.error}');
             }
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-            final clients = snap.data!;
+            final clients = snap.data!.where((c) => c.archived == _archive).toList();
             if (clients.isEmpty) {
-              return const _Message(icon: Icons.workspace_premium_rounded, title: 'Пока нет VIP-клиентов', subtitle: 'Создайте клиента из чата кнопкой VIP');
+              return _Message(
+                icon: _archive ? Icons.archive_outlined : Icons.workspace_premium_rounded,
+                title: _archive ? 'Архив пуст' : 'Пока нет VIP-клиентов',
+                subtitle: _archive ? 'Сюда попадают удалённые клиенты' : 'Создайте клиента из чата кнопкой VIP',
+              );
             }
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               itemCount: clients.length,
               itemBuilder: (context, i) {
                 final c = clients[i];
-                return SwipeableItem(
+                return ArchiveActions(
                   itemKey: ValueKey(c.id),
-                  title: 'Удалить VIP-клиента «${c.name}»?',
-                  onTap: () => VipClientSheet.show(context, existing: c),
-                  onDelete: () => ref.read(vipRepositoryProvider).delete(c.id!),
+                  archived: _archive,
+                  label: 'VIP-клиент «${c.name}»',
+                  onTap: _archive ? null : () => VipClientSheet.show(context, existing: c),
+                  onArchive: () => repo.archive(c.id!, true),
+                  onRestore: () => repo.archive(c.id!, false),
+                  onDeleteForever: () => repo.delete(c.id!),
                   child: _VipCard(c),
                 );
               },

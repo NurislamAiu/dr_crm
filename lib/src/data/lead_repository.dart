@@ -65,7 +65,11 @@ class LeadRepository {
     await _db.collection('leads').doc(id).set(data, SetOptions(merge: true));
   }
 
-  /// Удалить лид.
+  /// В архив / из архива (мягкое удаление).
+  Future<void> archive(String id, bool value) =>
+      _db.collection('leads').doc(id).set({'archived': value, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+
+  /// Удалить лид навсегда.
   Future<void> delete(String id) => _db.collection('leads').doc(id).delete();
 
   /// Поток списка лидов (по номеру, новые сверху).

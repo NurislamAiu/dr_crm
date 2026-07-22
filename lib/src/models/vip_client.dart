@@ -48,9 +48,11 @@ class VipClient {
     this.driverPhone,
     this.status = VipStatus.awaitingArrival,
     this.notes,
+    this.archived = false,
   });
 
   final String? id;
+  final bool archived;
 
   // Личные данные
   final String? clientNumber;
@@ -169,6 +171,7 @@ class VipClient {
       driverPhone: d['driverPhone'] as String?,
       status: VipStatus.fromId(d['status'] as String?),
       notes: d['notes'] as String?,
+      archived: d['archived'] == true,
     );
   }
 }

@@ -4,24 +4,38 @@ import 'package:intl/intl.dart';
 
 import '../models/lead.dart';
 import '../state/providers.dart';
-import '../widgets/swipeable_item.dart';
+import 'archive_actions.dart';
 import 'lead_sheet.dart';
 
 const _teal = Color(0xFF13B0A0);
 const _tealDark = Color(0xFF0E8F82);
 
 /// Экран списка лидов (реальное время из Firestore, коллекция `leads`).
-class LeadsScreen extends ConsumerWidget {
+class LeadsScreen extends ConsumerStatefulWidget {
   const LeadsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LeadsScreen> createState() => _LeadsScreenState();
+}
+
+class _LeadsScreenState extends ConsumerState<LeadsScreen> {
+  bool _archive = false;
+
+  @override
+  Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final stream = ref.watch(leadRepositoryProvider).watchAll();
+    final repo = ref.watch(leadRepositoryProvider);
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 20,
-        title: const Text('Лиды', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text(_archive ? 'Архив лидов' : 'Лиды', style: const TextStyle(fontWeight: FontWeight.w800)),
+        actions: [
+          IconButton(
+            icon: Icon(_archive ? Icons.list_alt_rounded : Icons.archive_outlined),
+            tooltip: _archive ? 'Активные' : 'Архив',
+            onPressed: () => setState(() => _archive = !_archive),
+          ),
+        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -32,7 +46,7 @@ class LeadsScreen extends ConsumerWidget {
           ),
         ),
         child: StreamBuilder<List<Lead>>(
-          stream: stream,
+          stream: repo.watchAll(),
           builder: (context, snap) {
             if (snap.hasError) {
               return _Message(icon: Icons.cloud_off, title: 'Ошибка загрузки', subtitle: '${snap.error}');
@@ -40,20 +54,27 @@ class LeadsScreen extends ConsumerWidget {
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
-            final leads = snap.data!;
+            final leads = snap.data!.where((l) => l.archived == _archive).toList();
             if (leads.isEmpty) {
-              return const _Message(icon: Icons.bolt_rounded, title: 'Пока нет лидов', subtitle: 'Создайте лид из чата кнопкой ЛИД');
+              return _Message(
+                icon: _archive ? Icons.archive_outlined : Icons.bolt_rounded,
+                title: _archive ? 'Архив пуст' : 'Пока нет лидов',
+                subtitle: _archive ? 'Сюда попадают удалённые лиды' : 'Создайте лид из чата кнопкой ЛИД',
+              );
             }
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               itemCount: leads.length,
               itemBuilder: (context, i) {
                 final lead = leads[i];
-                return SwipeableItem(
+                return ArchiveActions(
                   itemKey: ValueKey(lead.id),
-                  title: 'Удалить лид №${lead.leadNumber ?? ''} ${lead.name}?',
-                  onTap: () => LeadSheet.show(context, existing: lead),
-                  onDelete: () => ref.read(leadRepositoryProvider).delete(lead.id!),
+                  archived: _archive,
+                  label: 'лид №${lead.leadNumber ?? ''} ${lead.name}',
+                  onTap: _archive ? null : () => LeadSheet.show(context, existing: lead),
+                  onArchive: () => repo.archive(lead.id!, true),
+                  onRestore: () => repo.archive(lead.id!, false),
+                  onDeleteForever: () => repo.delete(lead.id!),
                   child: _LeadCard(lead),
                 );
               },

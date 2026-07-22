@@ -65,7 +65,11 @@ class VipRepository {
     await _col.doc(id).set(data, SetOptions(merge: true));
   }
 
-  /// Удалить клиента.
+  /// В архив / из архива (мягкое удаление).
+  Future<void> archive(String id, bool value) =>
+      _col.doc(id).set({'archived': value, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+
+  /// Удалить клиента навсегда.
   Future<void> delete(String id) => _col.doc(id).delete();
 
   /// Поток списка VIP-клиентов (новые сверху).

@@ -11,12 +11,14 @@ class Lead {
     this.appointmentDate,
     this.appointmentTime,
     this.prepayment,
+    this.archived = false,
   });
 
   final String? id;
   final int? leadNumber;
   final String name;
   final String? phone;
+  final bool archived;
 
   /// Приём у врача — день и время.
   final DateTime? appointmentDate;
@@ -63,6 +65,7 @@ class Lead {
       appointmentDate: d['appointmentDate'] is Timestamp ? (d['appointmentDate'] as Timestamp).toDate() : null,
       appointmentTime: d['appointmentTime'] as String?,
       prepayment: d['prepayment'] as num?,
+      archived: d['archived'] == true,
     );
   }
 }
