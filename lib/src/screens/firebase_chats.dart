@@ -13,6 +13,7 @@ import 'package:just_audio/just_audio.dart';
 
 import '../data/firestore_chat_repository.dart';
 import '../data/presence_service.dart';
+import '../data/quick_replies_service.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'lead_sheet.dart';
