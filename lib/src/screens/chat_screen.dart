@@ -775,26 +775,26 @@ class _ActionPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 10),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(16),
           child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 15),
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.5), blurRadius: 12, offset: const Offset(0, 4))],
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.32), blurRadius: 7, offset: const Offset(0, 2))],
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, color: Colors.white, size: 18),
-                const SizedBox(width: 5),
-                Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.8)),
+                Icon(icon, color: Colors.white, size: 14),
+                const SizedBox(width: 4),
+                Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5, letterSpacing: 0.4)),
               ],
             ),
           ),
