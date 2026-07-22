@@ -81,6 +81,24 @@ class FirestoreChatRepository {
   final FirebaseFirestore _db;
   final FirebaseFunctions _functions;
 
+  // Анти-бан: минимальный интервал между исходящими (по всем чатам).
+  // Быстрые серии сообщений растягиваются, чтобы WhatsApp не считал это спамом.
+  static const Duration _minGap = Duration(seconds: 3);
+  DateTime? _lastSendAt;
+
+  Future<void> _throttle() async {
+    final now = DateTime.now();
+    if (_lastSendAt != null) {
+      final elapsed = now.difference(_lastSendAt!);
+      if (elapsed < _minGap) {
+        final wait = _minGap - elapsed;
+        debugPrint('[FB-SEND] троттлинг: пауза ${wait.inMilliseconds} мс (анти-бан)');
+        await Future.delayed(wait);
+      }
+    }
+    _lastSendAt = DateTime.now();
+  }
+
   Stream<List<FsConversation>> watchConversations() {
     debugPrint('[FB] подписка на conversations');
     return _db.collection('conversations').orderBy('lastMessageAt', descending: true).snapshots().map(
@@ -113,6 +131,7 @@ class FirestoreChatRepository {
   /// Отправка текста через Cloud Function (sendMessage → Wazzup + Firestore).
   Future<void> sendText({required String phone, required String text, String? name}) async {
     debugPrint('[FB-SEND] текст → $phone: "${text.length > 30 ? '${text.substring(0, 30)}…' : text}"');
+    await _throttle();
     final callable = _functions.httpsCallable('sendMessage');
     final data = <String, dynamic>{'phone': phone, 'text': text};
     if (name != null) data['name'] = name;
@@ -157,6 +176,7 @@ class FirestoreChatRepository {
     final mediaUrl = await ref.getDownloadURL();
     debugPrint('[FB-MEDIA] URL: $mediaUrl');
 
+    await _throttle();
     final callable = _functions.httpsCallable('sendMedia');
     final data = <String, dynamic>{'phone': phone, 'mediaPath': path, 'mediaUrl': mediaUrl, 'type': kind};
     if (name != null) data['name'] = name;
