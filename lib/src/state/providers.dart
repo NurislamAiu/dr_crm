@@ -9,6 +9,7 @@ import '../data/firebase_manager_service.dart';
 import '../data/firestore_chat_repository.dart';
 import '../data/lead_repository.dart';
 import '../data/presence_service.dart';
+import '../data/quick_replies_service.dart';
 import '../data/vip_repository.dart';
 import '../models/models.dart';
 
@@ -44,6 +45,14 @@ final firebasePresenceServiceProvider = Provider<FirebasePresenceService>((_) =>
 
 /// Управление менеджерами в firebase-режиме.
 final firebaseManagerServiceProvider = Provider<FirebaseManagerService>((_) => FirebaseManagerService());
+
+/// Быстрые ответы (шаблоны сообщений, Firestore).
+final quickRepliesServiceProvider = Provider<QuickRepliesService>((_) => QuickRepliesService());
+
+/// Кэшированный стрим быстрых ответов.
+final quickRepliesProvider = StreamProvider<List<QuickReply>>((ref) {
+  return ref.watch(quickRepliesServiceProvider).watch();
+});
 
 /// Онлайн-менеджер (присутствие в системе).
 class OnlineUser {

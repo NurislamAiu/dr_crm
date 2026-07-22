@@ -603,8 +603,27 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     ]);
   }
 
+  void _openQuickReplies() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _QuickRepliesSheet(onPick: (text) {
+        _input.text = text;
+        _input.selection = TextSelection.fromPosition(TextPosition(offset: text.length));
+        setState(() => _hasText = text.trim().isNotEmpty);
+      }),
+    );
+  }
+
   Widget _inputBar(bool dark) {
     return Row(children: [
+      IconButton(
+        icon: const Icon(Icons.bolt_rounded, color: AppColors.brand),
+        tooltip: 'Быстрые ответы',
+        onPressed: _sending ? null : _openQuickReplies,
+      ),
       IconButton(
         icon: const Icon(Icons.add_circle_outline_rounded, color: AppColors.brand),
         onPressed: _sending ? null : _pickAndSend,
@@ -727,6 +746,150 @@ class _FbVoicePlayerState extends State<_FbVoicePlayer> {
           ),
         ),
       ]),
+    );
+  }
+}
+
+/// Лист быстрых ответов: выбрать (вставится в поле), добавить, удалить.
+class _QuickRepliesSheet extends ConsumerStatefulWidget {
+  const _QuickRepliesSheet({required this.onPick});
+  final void Function(String text) onPick;
+
+  @override
+  ConsumerState<_QuickRepliesSheet> createState() => _QuickRepliesSheetState();
+}
+
+class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
+  final _add = TextEditingController();
+  bool _adding = false;
+
+  @override
+  void dispose() {
+    _add.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitAdd() async {
+    final t = _add.text.trim();
+    if (t.isEmpty) return;
+    setState(() => _adding = true);
+    try {
+      await ref.read(quickRepliesServiceProvider).add(t);
+      _add.clear();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollCtrl) => Container(
+          decoration: BoxDecoration(
+            color: dark ? const Color(0xFF12191E) : const Color(0xFFF2F5F7),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(children: [
+            const SizedBox(height: 10),
+            Container(width: 42, height: 5, decoration: BoxDecoration(color: Colors.grey.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(3))),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+              child: Row(children: [
+                Icon(Icons.bolt_rounded, color: AppColors.brand),
+                SizedBox(width: 8),
+                Text('Быстрые ответы', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              ]),
+            ),
+            Expanded(
+              child: ref.watch(quickRepliesProvider).when(
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(child: Text('Ошибка: $e')),
+                    data: (items) {
+                      if (items.isEmpty) {
+                        return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Пока нет шаблонов. Добавьте ниже.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))));
+                      }
+                      return ListView.builder(
+                        controller: scrollCtrl,
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                        itemCount: items.length,
+                        itemBuilder: (context, i) {
+                          final q = items[i];
+                          return Dismissible(
+                            key: ValueKey(q.id),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 20),
+                              decoration: BoxDecoration(color: Colors.red.shade400, borderRadius: BorderRadius.circular(14)),
+                              child: const Icon(Icons.delete_outline, color: Colors.white),
+                            ),
+                            onDismissed: (_) => ref.read(quickRepliesServiceProvider).delete(q.id),
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: dark ? const Color(0xFF1B242B) : Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: ListTile(
+                                title: Text(q.text, maxLines: 3, overflow: TextOverflow.ellipsis),
+                                trailing: const Icon(Icons.north_east_rounded, size: 18, color: AppColors.brand),
+                                onTap: () {
+                                  widget.onPick(q.text);
+                                  Navigator.of(context).pop();
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+            ),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                child: Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _add,
+                      minLines: 1, maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText: 'Новый шаблон…',
+                        filled: true,
+                        fillColor: dark ? const Color(0xFF232E36) : Colors.white,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _adding ? null : _submitAdd,
+                    child: Container(
+                      width: 46, height: 46,
+                      decoration: const BoxDecoration(color: AppColors.brand, shape: BoxShape.circle),
+                      child: _adding
+                          ? const Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.add, color: Colors.white),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 }
