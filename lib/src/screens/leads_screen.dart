@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../models/lead.dart';
 import '../state/providers.dart';
 import 'archive_actions.dart';
+import 'day_utils.dart';
 import 'lead_sheet.dart';
 
 const _teal = Color(0xFF13B0A0);
@@ -20,6 +22,46 @@ class LeadsScreen extends ConsumerStatefulWidget {
 
 class _LeadsScreenState extends ConsumerState<LeadsScreen> {
   bool _archive = false;
+  List<Lead> _current = [];
+
+  void _export() {
+    final leads = _current;
+    if (leads.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Список пуст')));
+      return;
+    }
+    final b = StringBuffer();
+    b.writeln('№\tТелефон\tИмя\tПредоплата');
+    for (final l in leads) {
+      final prep = l.prepayment != null ? _LeadCard._money(l.prepayment!) : '';
+      b.writeln('${l.leadNumber ?? ''}\t${l.phone ?? ''}\t${l.name}\t$prep');
+    }
+    final text = b.toString();
+    Clipboard.setData(ClipboardData(text: text));
+    showDialog<void>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Экспорт (${leads.length})'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(child: SelectableText(text, style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5))),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Закрыть')),
+          FilledButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Копировать'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: text));
+              Navigator.pop(d);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Скопировано')));
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +72,11 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
         titleSpacing: 20,
         title: Text(_archive ? 'Архив лидов' : 'Лиды', style: const TextStyle(fontWeight: FontWeight.w800)),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.ios_share_rounded),
+            tooltip: 'Экспорт',
+            onPressed: () => _export(),
+          ),
           IconButton(
             icon: Icon(_archive ? Icons.list_alt_rounded : Icons.archive_outlined),
             tooltip: _archive ? 'Активные' : 'Архив',
@@ -62,11 +109,18 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
                 subtitle: _archive ? 'Сюда попадают удалённые лиды' : 'Создайте лид из чата кнопкой ЛИД',
               );
             }
+            _current = leads;
+            final rows = groupByDay<Lead>(leads, (l) => l.createdAt);
             return ListView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-              itemCount: leads.length,
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+              itemCount: rows.length,
               itemBuilder: (context, i) {
-                final lead = leads[i];
+                final row = rows[i];
+                if (row is String) {
+                  final cnt = leads.where((l) => dayLabel(l.createdAt) == row).length;
+                  return dayHeader(row, count: cnt);
+                }
+                final lead = row as Lead;
                 return ArchiveActions(
                   itemKey: ValueKey(lead.id),
                   archived: _archive,

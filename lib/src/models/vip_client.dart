@@ -49,10 +49,12 @@ class VipClient {
     this.status = VipStatus.awaitingArrival,
     this.notes,
     this.archived = false,
+    this.createdAt,
   });
 
   final String? id;
   final bool archived;
+  final DateTime? createdAt;
 
   // Личные данные
   final String? clientNumber;
@@ -172,6 +174,7 @@ class VipClient {
       status: VipStatus.fromId(d['status'] as String?),
       notes: d['notes'] as String?,
       archived: d['archived'] == true,
+      createdAt: (d['createdAt'] as Timestamp?)?.toDate(),
     );
   }
 }

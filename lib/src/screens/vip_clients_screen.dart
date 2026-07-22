@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../models/vip_client.dart';
 import '../state/providers.dart';
 import 'archive_actions.dart';
+import 'day_utils.dart';
 import 'vip_client_sheet.dart';
 
 const _vipRed = Color(0xFFE23744);
@@ -20,6 +22,46 @@ class VipClientsScreen extends ConsumerStatefulWidget {
 
 class _VipClientsScreenState extends ConsumerState<VipClientsScreen> {
   bool _archive = false;
+  List<VipClient> _current = [];
+
+  void _export() {
+    final items = _current;
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Список пуст')));
+      return;
+    }
+    final b = StringBuffer();
+    b.writeln('№\tТелефон\tИмя\tСтатус');
+    for (var i = 0; i < items.length; i++) {
+      final c = items[i];
+      b.writeln('${i + 1}\t${c.phone ?? ''}\t${c.name}\t${c.status.label}');
+    }
+    final text = b.toString();
+    Clipboard.setData(ClipboardData(text: text));
+    showDialog<void>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Экспорт (${items.length})'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(child: SelectableText(text, style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5))),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Закрыть')),
+          FilledButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Копировать'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: text));
+              Navigator.pop(d);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Скопировано')));
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +72,7 @@ class _VipClientsScreenState extends ConsumerState<VipClientsScreen> {
         titleSpacing: 20,
         title: Text(_archive ? 'Архив VIP' : 'VIP-клиенты', style: const TextStyle(fontWeight: FontWeight.w800)),
         actions: [
+          IconButton(icon: const Icon(Icons.ios_share_rounded), tooltip: 'Экспорт', onPressed: () => _export()),
           IconButton(
             icon: Icon(_archive ? Icons.list_alt_rounded : Icons.archive_outlined),
             tooltip: _archive ? 'Активные' : 'Архив',
@@ -60,11 +103,18 @@ class _VipClientsScreenState extends ConsumerState<VipClientsScreen> {
                 subtitle: _archive ? 'Сюда попадают удалённые клиенты' : 'Создайте клиента из чата кнопкой VIP',
               );
             }
+            _current = clients;
+            final rows = groupByDay<VipClient>(clients, (c) => c.createdAt);
             return ListView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-              itemCount: clients.length,
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+              itemCount: rows.length,
               itemBuilder: (context, i) {
-                final c = clients[i];
+                final row = rows[i];
+                if (row is String) {
+                  final cnt = clients.where((c) => dayLabel(c.createdAt) == row).length;
+                  return dayHeader(row, count: cnt);
+                }
+                final c = row as VipClient;
                 return ArchiveActions(
                   itemKey: ValueKey(c.id),
                   archived: _archive,

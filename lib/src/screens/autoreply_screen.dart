@@ -16,6 +16,7 @@ class AutoReplyScreen extends ConsumerStatefulWidget {
 class _AutoReplyScreenState extends ConsumerState<AutoReplyScreen> {
   AutoReplyConfig? _cfg;
   final _text = TextEditingController();
+  final _missedText = TextEditingController();
   bool _saving = false;
 
   @override
@@ -30,20 +31,27 @@ class _AutoReplyScreenState extends ConsumerState<AutoReplyScreen> {
     setState(() {
       _cfg = cfg;
       _text.text = cfg.text;
+      _missedText.text = cfg.missedCallText;
     });
   }
 
   @override
   void dispose() {
     _text.dispose();
+    _missedText.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
     final cfg = _cfg!;
     cfg.text = _text.text.trim();
+    cfg.missedCallText = _missedText.text.trim();
     if (cfg.enabled && cfg.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Укажите текст автоответа')));
+      return;
+    }
+    if (cfg.missedCallEnabled && cfg.missedCallText.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Укажите текст для пропущенного звонка')));
       return;
     }
     setState(() => _saving = true);
@@ -119,6 +127,26 @@ class _AutoReplyScreenState extends ConsumerState<AutoReplyScreen> {
                       onSelected: (_) => setState(() => cfg.cooldownMin = m),
                     ),
                 ]),
+                const Divider(height: 32),
+                SwitchListTile(
+                  value: cfg.missedCallEnabled,
+                  activeThumbColor: AppColors.brand,
+                  title: const Text('Автоответ на пропущенный звонок', style: TextStyle(fontWeight: FontWeight.w700)),
+                  subtitle: const Text('Когда клиент звонит и не дозвонился (кулдаун 1 ч)'),
+                  onChanged: (v) => setState(() => cfg.missedCallEnabled = v),
+                ),
+                if (cfg.missedCallEnabled) ...[
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _missedText,
+                    minLines: 2,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'Извините, мы не успели ответить на звонок. Напишите нам сюда — поможем.',
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
                 SizedBox(
                   height: 50,

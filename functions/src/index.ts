@@ -80,6 +80,7 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const statuses = Array.isArray(body.statuses) ? body.statuses : [];
   const inboundChats = new Set<string>();
+  const missedCallChats = new Set<string>();
 
   try {
     for (const m of messages) {
@@ -88,8 +89,9 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
       if (!chatId || !m.messageId) continue;
 
       const inbound = !m.isEcho;
-      if (inbound) inboundChats.add(chatId);
       const type = m.type ?? "text";
+      if (inbound) inboundChats.add(chatId);
+      if (inbound && type === "missing_call") missedCallChats.add(chatId);
       const text = m.text ?? null;
       const preview = text && text.length > 0 ? text : `[${type}]`;
       const ms = parseDateMs(m.dateTime);
@@ -157,6 +159,14 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
         console.error("autoReply error", e);
       }
     }
+    // Автоответ на пропущенный звонок.
+    for (const cid of missedCallChats) {
+      try {
+        await maybeMissedCallReply(cid, WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value());
+      } catch (e) {
+        console.error("missedCallReply error", e);
+      }
+    }
 
     res.json({ ok: true, messages: messages.length, statuses: statuses.length });
   } catch (e) {
@@ -211,6 +221,42 @@ async function maybeAutoReply(chatId: string, apiKey: string, channelId: string)
   );
   await convRef.set(
     { lastAutoReplyAt: ts(), lastMessageAt: ts(), lastMessagePreview: (cfg.text as string).slice(0, 120) },
+    { merge: true },
+  );
+}
+
+/** Автоответ на пропущенный звонок (config/autoReply.missedCall*). Кулдаун 60 мин. */
+async function maybeMissedCallReply(chatId: string, apiKey: string, channelId: string): Promise<void> {
+  const firestore = db();
+  const cfg = (await firestore.doc("config/autoReply").get()).data();
+  if (!cfg || cfg.missedCallEnabled !== true || !cfg.missedCallText) return;
+
+  const convRef = firestore.doc(`conversations/${chatId}`);
+  const conv = (await convRef.get()).data();
+  const last = (conv?.lastMissedReplyAt as admin.firestore.Timestamp | undefined)?.toDate();
+  if (last && Date.now() - last.getTime() < 60 * 60000) return;
+
+  const crmMessageId = randomUUID();
+  const res = await wazzupSendText(apiKey, { channelId, chatId, chatType: "whatsapp", text: cfg.missedCallText as string, crmMessageId });
+  const messageId = String(res.messageId ?? crmMessageId);
+  await firestore.collection("messages").doc(messageId).set(
+    {
+      conversationId: chatId,
+      chatId,
+      externalMessageId: res.messageId ?? null,
+      direction: "outbound",
+      type: "text",
+      text: cfg.missedCallText,
+      status: "sent",
+      authorId: "auto",
+      isAuto: true,
+      crmMessageId,
+      createdAt: ts(),
+    },
+    { merge: true },
+  );
+  await convRef.set(
+    { lastMissedReplyAt: ts(), lastMessageAt: ts(), lastMessagePreview: (cfg.missedCallText as string).slice(0, 120) },
     { merge: true },
   );
 }

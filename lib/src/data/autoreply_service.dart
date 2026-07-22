@@ -10,6 +10,8 @@ class AutoReplyConfig {
     this.workEnd = 20,
     this.tzOffset = 5,
     this.cooldownMin = 360,
+    this.missedCallEnabled = false,
+    this.missedCallText = '',
   });
   bool enabled;
   String text;
@@ -18,6 +20,8 @@ class AutoReplyConfig {
   int workEnd;
   int tzOffset;
   int cooldownMin;
+  bool missedCallEnabled;
+  String missedCallText;
 
   Map<String, dynamic> toMap() => {
         'enabled': enabled,
@@ -27,6 +31,8 @@ class AutoReplyConfig {
         'workEnd': workEnd,
         'tzOffset': tzOffset,
         'cooldownMin': cooldownMin,
+        'missedCallEnabled': missedCallEnabled,
+        'missedCallText': missedCallText.trim(),
       };
 
   static AutoReplyConfig fromMap(Map<String, dynamic>? d) {
@@ -39,6 +45,8 @@ class AutoReplyConfig {
       workEnd: (d['workEnd'] as num?)?.toInt() ?? 20,
       tzOffset: (d['tzOffset'] as num?)?.toInt() ?? 5,
       cooldownMin: (d['cooldownMin'] as num?)?.toInt() ?? 360,
+      missedCallEnabled: d['missedCallEnabled'] == true,
+      missedCallText: (d['missedCallText'] ?? '') as String,
     );
   }
 }
