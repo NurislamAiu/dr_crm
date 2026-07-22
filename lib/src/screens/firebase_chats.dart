@@ -245,6 +245,18 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     super.dispose();
   }
 
+  Future<void> _callPhone(String phone) async {
+    final digits = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+    final uri = Uri.parse('tel:$digits');
+    try {
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw Exception('нет приложения для звонка');
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось позвонить: $e')));
+    }
+  }
+
   Future<void> _startRec() async {
     try {
       if (!await _recorder.hasPermission()) {
@@ -507,6 +519,11 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
           Expanded(child: Text(widget.conversation.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
         ]),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.call_rounded, color: AppColors.brand),
+            tooltip: 'Позвонить',
+            onPressed: () => _callPhone(phone),
+          ),
           _pill('ЛИД', Icons.bolt_rounded, const [Color(0xFF20C9B6), Color(0xFF0E8F82)], const Color(0xFF13B0A0),
               () => LeadSheet.show(context, name: widget.conversation.name, phone: phone)),
           _pill('VIP', Icons.workspace_premium_rounded, const [Color(0xFFFF5566), Color(0xFFD11E31)], const Color(0xFFE23744),
