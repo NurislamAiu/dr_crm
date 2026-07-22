@@ -25,7 +25,6 @@ class FirebaseConversationsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final repo = ref.watch(firestoreChatRepositoryProvider);
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -50,20 +49,18 @@ class FirebaseConversationsScreen extends ConsumerWidget {
                 ]),
               ),
               Expanded(
-                child: StreamBuilder<List<FsConversation>>(
-                  stream: repo.watchConversations(),
-                  builder: (context, snap) {
-                    if (snap.hasError) return _msg(Icons.cloud_off, 'Ошибка', '${snap.error}');
-                    if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-                    final items = snap.data!;
-                    if (items.isEmpty) return _msg(Icons.forum_outlined, 'Пока нет чатов', 'Появятся после переключения вебхука');
-                    return ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
-                      itemCount: items.length,
-                      itemBuilder: (context, i) => _tile(context, items[i], dark),
-                    );
-                  },
-                ),
+                child: ref.watch(firebaseConversationsProvider).when(
+                      loading: () => const Center(child: CircularProgressIndicator()),
+                      error: (e, _) => _msg(Icons.cloud_off, 'Ошибка', '$e'),
+                      data: (items) {
+                        if (items.isEmpty) return _msg(Icons.forum_outlined, 'Пока нет чатов', 'Входящие появятся здесь');
+                        return ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+                          itemCount: items.length,
+                          itemBuilder: (context, i) => _tile(context, items[i], dark),
+                        );
+                      },
+                    ),
               ),
             ],
           ),
@@ -393,7 +390,6 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final repo = ref.watch(firestoreChatRepositoryProvider);
     final phone = widget.conversation.phone ?? widget.conversation.id;
     return Scaffold(
       appBar: AppBar(
@@ -425,20 +421,16 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
         ),
         child: Column(children: [
           Expanded(
-            child: StreamBuilder<List<FsMessage>>(
-              stream: repo.watchMessages(widget.conversation.id),
-              builder: (context, snap) {
-                if (snap.hasError) return Center(child: Text('Ошибка: ${snap.error}'));
-                if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-                final msgs = snap.data!;
-                return ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  itemCount: msgs.length,
-                  itemBuilder: (context, i) => _bubble(msgs[msgs.length - 1 - i], dark),
-                );
-              },
-            ),
+            child: ref.watch(firebaseMessagesProvider(widget.conversation.id)).when(
+                  loading: () => const Center(child: CircularProgressIndicator()),
+                  error: (e, _) => Center(child: Text('Ошибка: $e')),
+                  data: (msgs) => ListView.builder(
+                    reverse: true,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    itemCount: msgs.length,
+                    itemBuilder: (context, i) => _bubble(msgs[msgs.length - 1 - i], dark),
+                  ),
+                ),
           ),
           _composer(dark),
         ]),

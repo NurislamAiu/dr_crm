@@ -93,14 +93,16 @@ class FirestoreChatRepository {
 
   Stream<List<FsMessage>> watchMessages(String conversationId) {
     debugPrint('[FB] подписка на messages conversationId=$conversationId');
+    // Последние 100 (desc + limit), затем разворот для показа снизу вверх.
     return _db
         .collection('messages')
         .where('conversationId', isEqualTo: conversationId)
-        .orderBy('createdAt')
+        .orderBy('createdAt', descending: true)
+        .limit(100)
         .snapshots()
         .map((s) {
       debugPrint('[FB] messages($conversationId): ${s.docs.length} шт.');
-      return s.docs.map(FsMessage.fromDoc).toList();
+      return s.docs.map(FsMessage.fromDoc).toList().reversed.toList();
     });
   }
 

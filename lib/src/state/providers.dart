@@ -29,6 +29,16 @@ final firebaseAuthServiceProvider = Provider<FirebaseAuthService>((_) => Firebas
 /// Чаты поверх Firestore (миграция).
 final firestoreChatRepositoryProvider = Provider<FirestoreChatRepository>((_) => FirestoreChatRepository());
 
+/// Кэшированный стрим диалогов (одна подписка на всё приложение — без дублей чтений).
+final firebaseConversationsProvider = StreamProvider<List<FsConversation>>((ref) {
+  return ref.watch(firestoreChatRepositoryProvider).watchConversations();
+});
+
+/// Кэшированный стрим сообщений одного диалога (одна подписка на диалог).
+final firebaseMessagesProvider = StreamProvider.autoDispose.family<List<FsMessage>, String>((ref, conversationId) {
+  return ref.watch(firestoreChatRepositoryProvider).watchMessages(conversationId);
+});
+
 /// Присутствие менеджеров через Firestore (firebase-режим).
 final firebasePresenceServiceProvider = Provider<FirebasePresenceService>((_) => FirebasePresenceService());
 
