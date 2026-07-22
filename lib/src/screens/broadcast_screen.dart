@@ -5,9 +5,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 
-const _defaultTemplate = '''Здравствуйте, {name}!
-DR.TOITAYEV: напоминаем, что {date} у Вас запись к врачу.
-Для подтверждения, переноса или отмены записи напишите нам в WhatsApp на номер +7 777 175 44 45''';
+const _phone = '+7 777 175 44 45';
+
+/// 10 вариантов текста — каждому контакту уходит по очереди, чтобы WhatsApp
+/// не принял одинаковые сообщения за спам. Переменные {name} и {date}.
+const _defaultVariants = <String>[
+  'Здравствуйте, {name}!\nDR.TOITAYEV: напоминаем, что {date} у Вас запись к врачу.\nДля подтверждения, переноса или отмены записи напишите нам в WhatsApp или на рабочий номер клиники $_phone',
+  'Добрый день, {name}!\nКлиника DR.TOITAYEV напоминает о Вашем приёме {date}. Подтвердить, перенести или отменить визит можно ответом в этот чат или по номеру $_phone',
+  '{name}, здравствуйте!\nНапоминаем, что {date} Вас ждёт приём у врача в клинике DR.TOITAYEV. Подтвердить или изменить запись — напишите в WhatsApp либо позвоните: $_phone',
+  'Здравствуйте, {name}!\nЭто клиника DR.TOITAYEV. Ваш приём назначен на {date}. Пожалуйста, подтвердите визит — а если нужно перенести или отменить, напишите нам сюда или на $_phone',
+  'Добрый день, {name}!\nНапоминаем: {date} у Вас визит к врачу в DR.TOITAYEV. Для подтверждения, переноса или отмены ответьте в этот чат или позвоните $_phone',
+  '{name}, добрый день!\nКлиника DR.TOITAYEV ждёт Вас на приёме {date}. Чтобы подтвердить запись, перенести или отменить — свяжитесь с нами в WhatsApp или по телефону $_phone',
+  'Здравствуйте, {name}!\nНапоминаем о Вашей записи к врачу {date} (DR.TOITAYEV). Подтвердите, пожалуйста, визит. По вопросам переноса и отмены — WhatsApp или номер клиники $_phone',
+  'Уважаемый(ая) {name}!\nНапоминаем, что {date} у Вас запланирован приём в клинике DR.TOITAYEV. Подтвердить или изменить запись можно здесь в WhatsApp или по номеру $_phone',
+  'Здравствуйте, {name}!\nDR.TOITAYEV напоминает: приём у врача — {date}. Просим подтвердить визит. Перенос или отмена — напишите нам в WhatsApp либо позвоните $_phone',
+  'Добрый день, {name}!\nЖдём Вас {date} на приёме в клинике DR.TOITAYEV. Для подтверждения, переноса или отмены записи ответьте в этот чат или на рабочий номер $_phone',
+];
 
 const _delaySeconds = 20;
 
@@ -18,6 +31,7 @@ class _Row {
   final String name;
   final String phone;
   final String date;
+  int variant = 0; // номер использованного варианта (1..N)
   _St status = _St.pending;
   String? error;
 }
@@ -32,7 +46,8 @@ class BroadcastScreen extends ConsumerStatefulWidget {
 }
 
 class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
-  final _template = TextEditingController(text: _defaultTemplate);
+  final List<TextEditingController> _variants =
+      _defaultVariants.map((t) => TextEditingController(text: t)).toList();
   final _contacts = TextEditingController();
 
   List<_Row> _rows = [];
@@ -44,9 +59,22 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _template.dispose();
+    for (final c in _variants) {
+      c.dispose();
+    }
     _contacts.dispose();
     super.dispose();
+  }
+
+  List<String> _activeVariants() => _variants.map((c) => c.text).where((t) => t.trim().isNotEmpty).toList();
+
+  void _addVariant() => setState(() => _variants.add(TextEditingController()));
+
+  void _removeVariant(int i) {
+    setState(() {
+      final c = _variants.removeAt(i);
+      c.dispose();
+    });
   }
 
   List<_Row> _parse() {
@@ -84,7 +112,8 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
 
   Future<void> _start() async {
     final rows = _parse();
-    if (rows.isEmpty) return;
+    final variants = _activeVariants();
+    if (rows.isEmpty || variants.isEmpty) return;
     setState(() {
       _rows = rows;
       _running = true;
@@ -94,8 +123,12 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
 
     for (var i = 0; i < rows.length; i++) {
       if (_stop) break;
-      setState(() => rows[i].status = _St.sending);
-      final text = _template.text.replaceAll('{name}', rows[i].name).replaceAll('{date}', rows[i].date);
+      final vIndex = i % variants.length;
+      setState(() {
+        rows[i].status = _St.sending;
+        rows[i].variant = vIndex + 1;
+      });
+      final text = variants[vIndex].replaceAll('{name}', rows[i].name).replaceAll('{date}', rows[i].date);
       try {
         final res = await api.broadcastSend(name: rows[i].name, phone: rows[i].phone, text: text);
         final ok = res['ok'] == true;
@@ -143,12 +176,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
           children: [
             _hint(dark),
-            _card(dark, 'Текст сообщения', Icons.message_rounded, [
-              Text('Переменные: {name} — имя, {date} — дата приёма',
-                  style: TextStyle(fontSize: 12, color: context.semantic.textSecondary)),
-              const SizedBox(height: 8),
-              _multiline(dark, _template, minLines: 4, mono: false, enabled: !_running),
-            ]),
+            _variantsCard(dark),
             _card(dark, 'Контакты', Icons.people_alt_rounded, [
               Text('По одному в строке:  Имя;+7XXXXXXXXXX;дата',
                   style: TextStyle(fontSize: 12, color: context.semantic.textSecondary)),
@@ -187,6 +215,65 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           ),
         ]),
       );
+
+  Widget _variantsCard(bool dark) {
+    final sec = context.semantic.textSecondary;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1B242B) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.045), blurRadius: 10, offset: const Offset(0, 3))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+            child: const Icon(Icons.message_rounded, size: 16, color: AppColors.brand),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Тексты — ${_variants.length} вар.', style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700))),
+        ]),
+        const SizedBox(height: 4),
+        Text('Каждому контакту уходит следующий вариант по кругу. Переменные: {name}, {date}',
+            style: TextStyle(fontSize: 12, color: sec)),
+        const SizedBox(height: 10),
+        for (var i = 0; i < _variants.length; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(7)),
+                  child: Text('Вариант ${i + 1}', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppColors.brand)),
+                ),
+                const Spacer(),
+                if (_variants.length > 1 && !_running)
+                  GestureDetector(
+                    onTap: () => _removeVariant(i),
+                    child: Icon(Icons.delete_outline_rounded, size: 18, color: Colors.red.shade300),
+                  ),
+              ]),
+              const SizedBox(height: 6),
+              _multiline(dark, _variants[i], minLines: 3, mono: false, enabled: !_running),
+            ]),
+          ),
+        if (!_running)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _addVariant,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Добавить вариант'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.brand),
+            ),
+          ),
+      ]),
+    );
+  }
 
   Widget _card(bool dark, String title, IconData icon, List<Widget> children) => Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -247,7 +334,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                 )
               : FilledButton.icon(
                   style: FilledButton.styleFrom(backgroundColor: AppColors.brand, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  onPressed: parsedCount > 0 ? _start : null,
+                  onPressed: (parsedCount > 0 && _activeVariants().isNotEmpty) ? _start : null,
                   icon: const Icon(Icons.send_rounded),
                   label: Text('Отправить рассылку ($parsedCount)', style: const TextStyle(fontWeight: FontWeight.w700)),
                 ),
@@ -294,6 +381,12 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                       Text(_rows[i].error!, style: TextStyle(fontSize: 12, color: Colors.red.shade400)),
                   ]),
                 ),
+                if (_rows[i].variant > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(7)),
+                    child: Text('в${_rows[i].variant}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.brand)),
+                  ),
               ]),
             ),
         ],
