@@ -23,6 +23,18 @@ const _defaultVariants = <String>[
   'Добрый день, {name}!\nЖдём Вас {date} на приёме в клинике DR.TOITAYEV. Для подтверждения, переноса или отмены записи ответьте в этот чат или на рабочий номер $_phone',
 ];
 
+/// Шаблон запроса предоплаты (реквизиты — точь-в-точь как дал клиент).
+const _paymentTemplate = '''Здравствуйте, для подтверждения записи необходимо внести предоплату
+
+ВТБ Россия
+
+2204 3603 0004 5901
+
+ALIYA BAIKENOVA
+
+После внесения предоплаты отправьте чек, имя и контакт пациента.
+В случае отмены записи, предоплата не возвращается!''';
+
 const _delaySeconds = 20;
 
 /// Как выбирать вариант текста для каждого контакта.
@@ -77,6 +89,20 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
   List<String> _activeVariants() => _variants.map((c) => c.text).where((t) => t.trim().isNotEmpty).toList();
 
   void _addVariant() => setState(() => _variants.add(TextEditingController()));
+
+  /// Загрузить пресет текстов (заменяет текущие варианты).
+  void _loadPreset(List<String> texts, {required bool single}) {
+    setState(() {
+      for (final c in _variants) {
+        c.dispose();
+      }
+      _variants
+        ..clear()
+        ..addAll(texts.map((t) => TextEditingController(text: t)));
+      _singleIndex = 0;
+      _mode = single ? _Mode.single : _Mode.rotate;
+    });
+  }
 
   void _removeVariant(int i) {
     setState(() {
@@ -290,7 +316,21 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           const SizedBox(width: 10),
           Expanded(child: Text('Тексты — ${_variants.length} вар.', style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700))),
         ]),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          Text('Пресет:', style: TextStyle(fontSize: 12.5, color: sec)),
+          ActionChip(
+            avatar: const Icon(Icons.notifications_active_outlined, size: 16, color: AppColors.brand),
+            label: const Text('Напоминания'),
+            onPressed: _running ? null : () => _loadPreset(_defaultVariants, single: false),
+          ),
+          ActionChip(
+            avatar: const Icon(Icons.credit_card_rounded, size: 16, color: Color(0xFFC97A0A)),
+            label: const Text('Предоплата'),
+            onPressed: _running ? null : () => _loadPreset(const [_paymentTemplate], single: true),
+          ),
+        ]),
+        const SizedBox(height: 10),
         Text('Переменные: {name}, {date}', style: TextStyle(fontSize: 12, color: sec)),
         const SizedBox(height: 10),
         _modeChips(),
