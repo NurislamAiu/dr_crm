@@ -131,15 +131,17 @@ export const bootstrapAdmins = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, a
     return;
   }
   const firestore = db();
-  const existing = await firestore.collection("users").limit(1).get();
-  if (!existing.empty) {
-    res.json({ ok: true, skipped: true, note: "users уже существуют" });
-    return;
-  }
   const list = await admin.auth().listUsers(100);
   const created: string[] = [];
+  const skipped: string[] = [];
   for (const u of list.users) {
-    await firestore.collection("users").doc(u.uid).set({
+    const ref = firestore.collection("users").doc(u.uid);
+    const snap = await ref.get();
+    if (snap.exists) {
+      skipped.push(u.email ?? u.uid);
+      continue;
+    }
+    await ref.set({
       email: u.email ?? "",
       name: u.displayName ?? (u.email ?? ""),
       role: "admin",
@@ -148,7 +150,9 @@ export const bootstrapAdmins = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, a
     });
     created.push(u.email ?? u.uid);
   }
-  res.json({ ok: true, created });
+  const all = await firestore.collection("users").get();
+  const existingDocs = all.docs.map((d) => ({ id: d.id, email: d.get("email"), role: d.get("role") }));
+  res.json({ ok: true, created, skipped, usersDocsTotal: all.size, existingDocs });
 });
 
 /** Создать менеджера (callable, только админ): Firebase Auth + users/{uid}. */
@@ -156,7 +160,10 @@ export const createManager = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Требуется вход");
   const caller = await db().collection("users").doc(uid).get();
-  if (caller.data()?.role !== "admin") throw new HttpsError("permission-denied", "Только админ");
+  const callerRole = caller.data()?.role;
+  if (callerRole !== "admin" && callerRole !== "administrator") {
+    throw new HttpsError("permission-denied", "Только админ");
+  }
 
   const data = (request.data ?? {}) as { email?: string; name?: string; password?: string; role?: string };
   const email = (data.email ?? "").trim();
