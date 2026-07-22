@@ -13,6 +13,7 @@ class AppConfig extends ChangeNotifier {
     this.userId,
     this.userName,
     this.role,
+    this.backend = 'mac',
   });
 
   String apiBaseUrl;
@@ -22,12 +23,18 @@ class AppConfig extends ChangeNotifier {
   String? userName;
   String? role;
 
+  /// Источник данных: 'mac' (текущий Next.js backend) или 'firebase' (миграция).
+  String backend;
+
   static const _kApi = 'apiBaseUrl';
   static const _kRt = 'realtimeUrl';
   static const _kToken = 'token';
   static const _kUserId = 'userId';
   static const _kUserName = 'userName';
   static const _kRole = 'role';
+  static const _kBackend = 'backend';
+
+  bool get isFirebase => backend == 'firebase';
 
   static Future<AppConfig> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -38,7 +45,15 @@ class AppConfig extends ChangeNotifier {
       userId: prefs.getString(_kUserId),
       userName: prefs.getString(_kUserName),
       role: prefs.getString(_kRole),
+      backend: prefs.getString(_kBackend) ?? 'mac',
     );
+  }
+
+  Future<void> setBackend(String value) async {
+    backend = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kBackend, value);
+    notifyListeners();
   }
 
   bool get isAuthenticated => token != null && token!.isNotEmpty;

@@ -1,37 +1,40 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'broadcast_screen.dart';
 import 'conversations_screen.dart';
+import 'firebase_chats.dart';
 import 'leads_screen.dart';
 import 'settings_screen.dart';
 import 'vip_clients_screen.dart';
 
 /// Корневой каркас с нижней навигацией: Чаты · Лиды · VIP · Рассылка · Настройки.
-class MainShell extends StatefulWidget {
+class MainShell extends ConsumerStatefulWidget {
   const MainShell({super.key});
 
   @override
-  State<MainShell> createState() => _MainShellState();
+  ConsumerState<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends ConsumerState<MainShell> {
   int _index = 0;
-
-  // Держим экраны живыми между вкладками (стримы Firestore/чатов не пересоздаются).
-  static const _pages = [
-    ConversationsScreen(),
-    LeadsScreen(),
-    VipClientsScreen(),
-    BroadcastScreen(),
-    SettingsScreen(),
-  ];
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    // Вкладка «Чаты» зависит от backend: firebase → Firestore-чаты.
+    final isFirebase = ref.watch(appConfigProvider).isFirebase;
+    final pages = [
+      isFirebase ? const FirebaseConversationsScreen() : const ConversationsScreen(),
+      const LeadsScreen(),
+      const VipClientsScreen(),
+      const BroadcastScreen(),
+      const SettingsScreen(),
+    ];
     return Scaffold(
-      body: IndexedStack(index: _index, children: _pages),
+      body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: NavigationBarTheme(
         data: NavigationBarThemeData(
           indicatorColor: AppColors.brand.withValues(alpha: 0.16),

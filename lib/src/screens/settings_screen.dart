@@ -72,6 +72,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             icon: const Icon(Icons.logout),
             label: const Text('Выйти'),
             onPressed: () async {
+              if (config.isFirebase) {
+                await ref.read(firebaseAuthServiceProvider).signOut().catchError((_) {});
+              }
               await config.logout();
               if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
             },

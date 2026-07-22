@@ -20,6 +20,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _busy = false;
   bool _showAdvanced = false;
   String? _error;
+  late String _backend;
 
   @override
   void initState() {
@@ -27,6 +28,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final c = ref.read(appConfigProvider);
     _api = TextEditingController(text: c.apiBaseUrl);
     _rt = TextEditingController(text: c.realtimeUrl);
+    _backend = c.backend;
   }
 
   @override
@@ -45,15 +47,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
     final config = ref.read(appConfigProvider);
     try {
-      await config.setEndpoints(_api.text, _rt.text);
-      final data = await ref.read(apiClientProvider).login(_email.text.trim(), _password.text);
-      final user = data['user'] as Map<String, dynamic>;
-      await config.setSession(
-        token: data['token'] as String,
-        userId: user['id'] as String,
-        userName: user['name'] as String? ?? '',
-        role: user['role'] as String? ?? 'manager',
-      );
+      await config.setBackend(_backend);
+      if (config.isFirebase) {
+        // Вход через Firebase Auth + профиль/роль из users/{uid}.
+        final auth = ref.read(firebaseAuthServiceProvider);
+        await auth.signIn(_email.text.trim(), _password.text);
+        final profile = await auth.loadProfile();
+        if (profile == null) {
+          await auth.signOut();
+          throw Exception('Профиль менеджера не найден (нет users/{uid})');
+        }
+        if (!profile.isActive) {
+          await auth.signOut();
+          throw Exception('Аккаунт отключён');
+        }
+        await config.setSession(token: 'firebase', userId: profile.uid, userName: profile.name, role: profile.role);
+      } else {
+        await config.setEndpoints(_api.text, _rt.text);
+        final data = await ref.read(apiClientProvider).login(_email.text.trim(), _password.text);
+        final user = data['user'] as Map<String, dynamic>;
+        await config.setSession(
+          token: data['token'] as String,
+          userId: user['id'] as String,
+          userName: user['name'] as String? ?? '',
+          role: user['role'] as String? ?? 'manager',
+        );
+      }
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -107,6 +126,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
               children: [
                 Text('Вход', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                _label('Backend'),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'mac', label: Text('Mac (текущий)'), icon: Icon(Icons.dns_outlined)),
+                    ButtonSegment(value: 'firebase', label: Text('Firebase'), icon: Icon(Icons.cloud_outlined)),
+                  ],
+                  selected: {_backend},
+                  onSelectionChanged: _busy ? null : (s) => setState(() => _backend = s.first),
+                ),
                 const SizedBox(height: 16),
                 _label('Email'),
                 TextField(controller: _email, decoration: const InputDecoration(prefixIcon: Icon(Icons.mail_outline))),

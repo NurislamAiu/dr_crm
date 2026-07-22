@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
+import '../api/firebase_auth_service.dart';
 import '../api/realtime_client.dart';
 import '../config/app_config.dart';
+import '../data/firestore_chat_repository.dart';
 import '../data/lead_repository.dart';
 import '../data/vip_repository.dart';
 import '../models/models.dart';
@@ -18,6 +20,12 @@ final vipRepositoryProvider = Provider<VipRepository>((_) => VipRepository());
 
 /// Репозиторий лидов (Firestore, коллекция leads).
 final leadRepositoryProvider = Provider<LeadRepository>((_) => LeadRepository());
+
+/// Firebase Auth (миграция backend на Firebase).
+final firebaseAuthServiceProvider = Provider<FirebaseAuthService>((_) => FirebaseAuthService());
+
+/// Чаты поверх Firestore (миграция).
+final firestoreChatRepositoryProvider = Provider<FirestoreChatRepository>((_) => FirestoreChatRepository());
 
 /// Онлайн-менеджер (присутствие в системе).
 class OnlineUser {
