@@ -53,7 +53,25 @@ enum _Filter { all, high, blast, money, cold }
 
 class _RiskScreenState extends ConsumerState<RiskScreen> {
   late int _days = widget.days;
+
+  /// Выбран конкретный день (вчера или дата из календаря) — тогда `_days`
+  /// не используется.
+  DateTime? _day;
   _Filter _filter = _Filter.all;
+
+  static DateTime get _today {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month, n.day);
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Заголовок периода для шапки.
+  String get _periodLabel {
+    final d = _day;
+    if (d != null) return humanDate(d);
+    return switch (_days) { 0 => 'Сегодня', 7 => 'За 7 дней', _ => 'За 30 дней' };
+  }
 
   bool _matches(RiskEvent e) => switch (_filter) {
         _Filter.all => true,
@@ -65,7 +83,7 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final async = ref.watch(riskEventsProvider((days: _days, uid: widget.uid)));
+    final async = ref.watch(riskEventsProvider((days: _days, uid: widget.uid, day: _day)));
     final all = async.value ?? const <RiskEvent>[];
     final list = all.where(_matches).toList();
     final high = all.where((e) => e.isHigh).length;
@@ -78,9 +96,16 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
           color: kRisk,
           colorDeep: kRiskDeep,
           title: widget.name?.isNotEmpty == true ? widget.name! : 'Контроль',
-          dateLabel: widget.uid == null ? 'Подозрительная активность' : 'Нарушения менеджера',
+          dateLabel: '${widget.uid == null ? 'Подозрительная активность' : 'Нарушения менеджера'} · $_periodLabel',
           showBack: true,
           actions: [
+            SoftHeaderButton(
+              icon: Iconsax.calendar_1,
+              tooltip: 'Выбрать день',
+              accent: kRiskDeep,
+              active: _day != null,
+              onTap: _pickDay,
+            ),
             if (widget.uid == null)
               SoftHeaderButton(
                 icon: Iconsax.setting_4,
@@ -119,34 +144,59 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
     );
   }
 
+  /// Сегодня · Вчера · 7 дней · 30 дней (любой другой день — через календарь).
   Widget _periodChips() {
-    const items = [(0, 'Сегодня'), (7, '7 дней'), (30, '30 дней')];
+    final yesterday = _today.subtract(const Duration(days: 1));
+    final items = <(String, bool, VoidCallback)>[
+      ('Сегодня', _day == null && _days == 0, () => setState(() { _day = null; _days = 0; })),
+      ('Вчера', _day != null && _sameDay(_day!, yesterday), () => setState(() => _day = yesterday)),
+      ('7 дней', _day == null && _days == 7, () => setState(() { _day = null; _days = 7; })),
+      ('30 дней', _day == null && _days == 30, () => setState(() { _day = null; _days = 30; })),
+    ];
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(14)),
       child: Row(children: [
-        for (final (d, label) in items)
+        for (final (label, sel, onTap) in items)
           Expanded(
             child: GestureDetector(
-              onTap: () => setState(() => _days = d),
+              onTap: onTap,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 decoration: BoxDecoration(
-                  color: _days == d ? Colors.white : Colors.transparent,
+                  color: sel ? Colors.white : Colors.transparent,
                   borderRadius: BorderRadius.circular(11),
                 ),
                 alignment: Alignment.center,
-                child: Text(label,
-                    style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: _days == d ? FontWeight.w700 : FontWeight.w500,
-                        color: _days == d ? kRiskDeep : Colors.white.withValues(alpha: 0.85))),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(label,
+                      maxLines: 1,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                          color: sel ? kRiskDeep : Colors.white.withValues(alpha: 0.85))),
+                ),
               ),
             ),
           ),
       ]),
     );
+  }
+
+  /// Любой день из календаря (сброс — снова период «сегодня»).
+  Future<void> _pickDay() async {
+    final res = await showSoftDatePicker(context, selected: _day, accent: kRiskDeep);
+    if (!mounted || res == null) return;
+    setState(() {
+      if (res == clearDateSentinel) {
+        _day = null;
+        _days = 0;
+      } else if (res is DateTime) {
+        _day = DateTime(res.year, res.month, res.day);
+      }
+    });
   }
 
   Widget _filterRow(List<RiskEvent> all) {

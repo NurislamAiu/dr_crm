@@ -90,14 +90,21 @@ final singleSessionEnabledProvider = StreamProvider((ref) => ref.watch(sessionSe
 /// Журнал подозрительной активности менеджеров (только для админа).
 final riskServiceProvider = Provider<RiskService>((_) => RiskService());
 
-/// События контроля за период: `days` = 0 (сегодня) / 7 / 30, `uid` — фильтр
-/// по менеджеру. autoDispose: подписка живёт, пока открыт экран.
+/// События контроля: `day` — конкретная дата (весь день), иначе `days` = 0
+/// (сегодня) / 7 / 30 назад. `uid` — фильтр по менеджеру.
+/// autoDispose: подписка живёт, пока открыт экран.
 final riskEventsProvider =
-    StreamProvider.autoDispose.family<List<RiskEvent>, ({int days, String? uid})>((ref, arg) {
+    StreamProvider.autoDispose.family<List<RiskEvent>, ({int days, String? uid, DateTime? day})>((ref, arg) {
+  final svc = ref.watch(riskServiceProvider);
+  final d = arg.day;
+  if (d != null) {
+    final from = DateTime(d.year, d.month, d.day);
+    return svc.watch(since: from, until: from.add(const Duration(days: 1)), uid: arg.uid);
+  }
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final since = arg.days == 0 ? today : today.subtract(Duration(days: arg.days));
-  return ref.watch(riskServiceProvider).watch(since: since, uid: arg.uid);
+  return svc.watch(since: since, uid: arg.uid);
 });
 
 /// Свои номера клиники (не считаются «чужим номером» в сообщении).

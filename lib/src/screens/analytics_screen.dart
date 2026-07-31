@@ -99,7 +99,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
     final onlineUsers = ref.watch(presenceUsersProvider).value ?? const <PresenceUser>[];
 
     // Контроль подозрительной активности за тот же период.
-    final risks = ref.watch(riskEventsProvider((days: _days, uid: null))).value ?? const <RiskEvent>[];
+    final risks = ref.watch(riskEventsProvider((days: _days, uid: null, day: null))).value ?? const <RiskEvent>[];
     final riskByUid = <String, int>{};
     final riskHighByUid = <String, int>{};
     for (final e in risks) {

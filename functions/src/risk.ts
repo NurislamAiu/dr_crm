@@ -82,6 +82,44 @@ function textKey(text: string): string {
 /** Только цифры (для сравнения телефонов с белым списком). */
 const digits = (s: string) => s.replace(/\D/g, "");
 
+/**
+ * Признаки по самому тексту (без обращений к базе). Вынесено отдельно, чтобы
+ * тем же кодом разбирать историю переписки (riskBackfill).
+ */
+export function textFlags(text: string, allow: string[], chatId: string): RiskKind[] {
+  const kinds: RiskKind[] = [];
+  if (RE_CARD.test(text) || RE_IBAN.test(text) || (RE_PAY.test(text) && /\d{8,}/.test(text))) {
+    kinds.push("card");
+  }
+  const found = text.match(RE_PHONE) ?? [];
+  if (found.length) {
+    const outside = found
+      .map(digits)
+      .map((d) => (d.length === 11 && d.startsWith("8") ? `7${d.slice(1)}` : d))
+      .filter((d) => d.length >= 10 && d !== digits(chatId) && !allow.includes(d));
+    if (outside.length) kinds.push("phone");
+  }
+  return kinds;
+}
+
+/** Есть ли ссылка в тексте. */
+export const hasLink = (text: string) => RE_LINK.test(text);
+
+/** Отпечаток текста — для поиска «одинаковый текст многим». */
+export const fingerprint = (text: string) => textKey(text);
+
+/** Вне рабочих часов клиники (08:00–23:00 по Астане). */
+export function isNight(d: Date): boolean {
+  const h = localHour(d);
+  return h < WORK_START || h >= WORK_END;
+}
+
+/** Свои номера из config/risk (с кэшем) — нужны и разбору истории. */
+export const loadAllowedPhones = () => allowedPhones();
+
+/** Локальный день YYYY-MM-DD (Астана) — для группировки. */
+export const dayKey = (d: Date) => localDayKey(d);
+
 // ── Кэши (живут в инстансе функции, экономят чтения) ──────────────────────
 const nameCache = new Map<string, { name: string; at: number }>();
 let allowCache: { phones: string[]; at: number } | null = null;
@@ -235,26 +273,11 @@ export async function auditOutbound(p: {
 
     if (p.cold) kinds.push("cold");
 
-    // Реквизиты: 16 цифр, IBAN или «на карту» рядом с длинным числом.
-    if (RE_CARD.test(text) || RE_IBAN.test(text) || (RE_PAY.test(text) && /\d{8,}/.test(text))) {
-      kinds.push("card");
-    }
+    // Реквизиты карты/Kaspi и посторонний номер телефона в тексте.
+    kinds.push(...textFlags(text, await allowedPhones(), p.chatId));
 
-    // Посторонний номер телефона в тексте (кроме разрешённых в config/risk).
-    const found = text.match(RE_PHONE) ?? [];
-    if (found.length) {
-      const allow = await allowedPhones();
-      const outside = found
-        .map(digits)
-        .map((d) => (d.length === 11 && d.startsWith("8") ? `7${d.slice(1)}` : d))
-        .filter((d) => d.length >= 10 && d !== digits(p.chatId) && !allow.includes(d));
-      if (outside.length) kinds.push("phone");
-    }
-
-    if (p.cold && RE_LINK.test(text)) kinds.push("link");
-
-    const h = localHour(new Date());
-    if (h < WORK_START || h >= WORK_END) kinds.push("night");
+    if (p.cold && hasLink(text)) kinds.push("link");
+    if (isNight(new Date())) kinds.push("night");
 
     // Ночь/холодный контакт сами по себе — обычная работа. Событие пишем,
     // только если есть что-то весомое или совпало несколько признаков.

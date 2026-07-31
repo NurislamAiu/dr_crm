@@ -78,11 +78,13 @@ class RiskService {
   Future<void> setAllowedPhones(List<String> phones) =>
       _cfg.set({'allowedPhones': phones}, SetOptions(merge: true));
 
-  /// События за период; [uid] — только по одному менеджеру.
+  /// События за период; [until] — верхняя граница (для одного дня),
+  /// [uid] — только по одному менеджеру.
   /// limit(300): журнал растёт, читать его целиком незачем.
-  Stream<List<RiskEvent>> watch({required DateTime since, String? uid}) {
+  Stream<List<RiskEvent>> watch({required DateTime since, DateTime? until, String? uid}) {
     Query<Map<String, dynamic>> q =
         _db.collection('riskEvents').where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(since));
+    if (until != null) q = q.where('createdAt', isLessThan: Timestamp.fromDate(until));
     if (uid != null) q = q.where('authorId', isEqualTo: uid);
     return q
         .orderBy('createdAt', descending: true)

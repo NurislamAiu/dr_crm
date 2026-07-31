@@ -6,7 +6,7 @@ import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import { randomUUID, createHmac } from "crypto";
 import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, wazzupEditText, wazzupDeleteMessage, type WazzupMessage, type WazzupStatus } from "./wazzup";
-import { auditOutbound, logRisk, peekChat } from "./risk";
+import { auditOutbound, dayKey, fingerprint, hasLink, isNight, loadAllowedPhones, logRisk, peekChat, textFlags, type RiskKind } from "./risk";
 
 admin.initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
@@ -857,6 +857,205 @@ export const deleteMessage = onCall({ secrets: [WAZZUP_API_KEY] }, async (reques
   }).catch(() => {});
   return { ok: true };
 });
+
+/**
+ * Разбор УЖЕ НАКОПЛЕННОЙ переписки: прогоняет историю сообщений через те же
+ * правила и записывает события в riskEvents задним числом (id = bf_<messageId>,
+ * повторный запуск ничего не дублирует). Заодно возвращает сводку по дням —
+ * видно, в какой день и кто отправлял столько, что WhatsApp мог забанить.
+ *
+ * GET /riskBackfill?secret=<webhook secret>&days=21[&dry=1]
+ */
+export const riskBackfill = onRequest(
+  { secrets: [WAZZUP_WEBHOOK_SECRET], timeoutSeconds: 540, memory: "1GiB" },
+  async (req, res) => {
+    if ((req.query.secret as string | undefined) !== WAZZUP_WEBHOOK_SECRET.value()) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    const days = Math.min(Math.max(Number(req.query.days ?? 21), 1), 90);
+    const dry = req.query.dry === "1";
+    const firestore = db();
+    const since = admin.firestore.Timestamp.fromMillis(Date.now() - days * 86400_000);
+
+    type Out = { id: string; chatId: string; authorId: string; text: string; ms: number; broadcast: boolean };
+    const outbound: Out[] = [];
+    const inboundChats = new Set<string>();
+    const perDay = new Map<string, { out: number; inc: number; chats: Set<string>; cold: number; blast: number; hours: Map<number, number> }>();
+    let scanned = 0;
+    let inboundTotal = 0;
+
+    // Пагинация: читаем только нужные поля.
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+    for (let page = 0; page < 40; page++) {
+      let q = firestore
+        .collection("messages")
+        .where("createdAt", ">=", since)
+        .orderBy("createdAt", "asc")
+        .select("conversationId", "chatId", "direction", "authorId", "text", "createdAt", "isBroadcast", "isAuto", "type")
+        .limit(2000);
+      if (cursor) q = q.startAfter(cursor);
+      const snap = await q.get();
+      if (snap.empty) break;
+      cursor = snap.docs[snap.docs.length - 1] ?? null;
+      scanned += snap.size;
+
+      for (const d of snap.docs) {
+        const x = d.data();
+        const chatId = String(x.conversationId ?? x.chatId ?? "");
+        const ms = (x.createdAt as admin.firestore.Timestamp | undefined)?.toMillis() ?? 0;
+        if (!chatId || !ms) continue;
+        const day = dayKey(new Date(ms));
+        const bucket = perDay.get(day) ?? { out: 0, inc: 0, chats: new Set<string>(), cold: 0, blast: 0, hours: new Map<number, number>() };
+        perDay.set(day, bucket);
+
+        if (x.direction === "inbound") {
+          inboundChats.add(chatId);
+          inboundTotal++;
+          bucket.inc++;
+          continue;
+        }
+        if (x.isAuto === true || x.authorId === "auto") continue;
+        bucket.out++;
+        bucket.chats.add(chatId);
+        const hour = new Date(ms + 5 * 3600_000).getUTCHours();
+        bucket.hours.set(hour, (bucket.hours.get(hour) ?? 0) + 1);
+        if (x.isBroadcast === true) bucket.blast++;
+        outbound.push({
+          id: d.id,
+          chatId,
+          authorId: String(x.authorId ?? ""),
+          text: String(x.text ?? (x.type ? `[${x.type}]` : "")),
+          ms,
+          broadcast: x.isBroadcast === true,
+        });
+      }
+      if (snap.size < 2000) break;
+    }
+
+    // Холодные контакты: чат, из которого нам ни разу не писали.
+    const chats = [...new Set(outbound.map((o) => o.chatId))].filter((c) => !inboundChats.has(c));
+    const coldChats = new Set<string>();
+    for (let i = 0; i < chats.length; i += 300) {
+      const refs = chats.slice(i, i + 300).map((c) => firestore.doc(`conversations/${c}`));
+      const docs = await firestore.getAll(...refs);
+      for (const s of docs) {
+        if (s.data()?.hasInbound !== true) coldChats.add(s.id);
+      }
+    }
+
+    // Имена менеджеров.
+    const names = new Map<string, string>();
+    const users = await firestore.collection("users").get();
+    for (const u of users.docs) names.set(u.id, String(u.data().name ?? "").trim());
+
+    const allow = await loadAllowedPhones();
+    const state = new Map<string, { c: string; h: string; t: number }[]>();
+    const byKind: Record<string, number> = {};
+    const byAuthor = new Map<string, Record<string, number>>();
+    const events: { id: string; doc: Record<string, unknown>; score: number }[] = [];
+
+    for (const o of outbound) {
+      const kinds: RiskKind[] = [];
+      const hash = fingerprint(o.text);
+      const list = (state.get(o.authorId) ?? []).filter((r) => o.ms - r.t < 60 * 60_000);
+      list.push({ c: o.chatId, h: hash, t: o.ms });
+      state.set(o.authorId, list.slice(-120));
+
+      if (!o.broadcast) {
+        const same = new Set(list.filter((r) => r.h === hash).map((r) => r.c));
+        if (o.text.trim().length > 0 && same.size >= 5) kinds.push("mass");
+        const burst = new Set(list.filter((r) => o.ms - r.t < 5 * 60_000).map((r) => r.c));
+        if (burst.size > 12) kinds.push("burst");
+      }
+      const cold = coldChats.has(o.chatId);
+      if (cold) {
+        kinds.push("cold");
+        const b = perDay.get(dayKey(new Date(o.ms)));
+        if (b) b.cold++;
+      }
+      kinds.push(...textFlags(o.text, allow, o.chatId));
+      if (cold && hasLink(o.text)) kinds.push("link");
+      if (isNight(new Date(o.ms))) kinds.push("night");
+      if (o.broadcast) kinds.push("blast");
+
+      const weight: Record<string, number> = { card: 3, mass: 3, blast: 2, cold: 2, phone: 2, burst: 2, night: 1, link: 1 };
+      const score = kinds.reduce((s, k) => s + (weight[k] ?? 1), 0);
+      const notable = kinds.some((k) => (weight[k] ?? 1) >= 2) || kinds.length >= 2;
+      if (!notable) continue;
+
+      for (const k of kinds) byKind[k] = (byKind[k] ?? 0) + 1;
+      const a = byAuthor.get(o.authorId) ?? {};
+      a.total = (a.total ?? 0) + 1;
+      for (const k of kinds) a[k] = (a[k] ?? 0) + 1;
+      byAuthor.set(o.authorId, a);
+
+      events.push({
+        id: `bf_${o.id}`,
+        score,
+        doc: {
+          authorId: o.authorId,
+          authorName: names.get(o.authorId) ?? "",
+          chatId: o.chatId,
+          phone: o.chatId,
+          text: o.text.slice(0, 300),
+          kinds,
+          severity: score >= 3 ? "high" : score >= 2 ? "medium" : "low",
+          score,
+          count: null,
+          messageId: o.id,
+          day: dayKey(new Date(o.ms)),
+          createdAt: admin.firestore.Timestamp.fromMillis(o.ms),
+          backfilled: true,
+        },
+      });
+    }
+
+    if (!dry) {
+      for (let i = 0; i < events.length; i += 400) {
+        const batch = firestore.batch();
+        for (const e of events.slice(i, i + 400)) {
+          batch.set(firestore.collection("riskEvents").doc(e.id), e.doc, { merge: true });
+        }
+        await batch.commit();
+      }
+    }
+
+    const daysOut = [...perDay.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([day, b]) => {
+        let peakHour = -1;
+        let peak = 0;
+        for (const [h, n] of b.hours) if (n > peak) { peak = n; peakHour = h; }
+        return {
+          day,
+          out: b.out,
+          in: b.inc,
+          chats: b.chats.size,
+          cold: b.cold,
+          broadcast: b.blast,
+          peak: `${peakHour < 0 ? "—" : `${peakHour}:00`} · ${peak}`,
+        };
+      });
+
+    res.json({
+      ok: true,
+      days,
+      dry,
+      scanned,
+      outbound: outbound.length,
+      inbound: inboundTotal,
+      events: events.length,
+      byKind,
+      byAuthor: [...byAuthor.entries()].map(([uid, v]) => ({ uid, name: names.get(uid) ?? "", ...v })),
+      byDay: daysOut,
+      top: events
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+        .map((e) => ({ kinds: e.doc.kinds, name: e.doc.authorName, day: e.doc.day, text: String(e.doc.text).slice(0, 120) })),
+    });
+  },
+);
 
 /**
  * Входящее медиа: как только в messages появляется contentUri без mediaUrl —
