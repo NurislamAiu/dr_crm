@@ -135,6 +135,7 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
             ),
             child: Column(children: [
               const SizedBox(height: 14),
+              if (widget.uid == null) _queueCard(),
               _filterRow(all),
               Expanded(child: _body(async.isLoading && all.isEmpty, list, async.hasError)),
             ]),
@@ -182,6 +183,41 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
             ),
           ),
       ]),
+    );
+  }
+
+  /// Очередь отправки: сообщения, придержанные лимитом темпа.
+  Widget _queueCard() {
+    final n = ref.watch(queueSizeProvider).value ?? 0;
+    if (n == 0) return const SizedBox.shrink();
+    final lim = ref.watch(sendLimitsProvider).value ?? const SendLimits();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(15, 0, 15, 12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: kTeal.withValues(alpha: 0.35)),
+        ),
+        child: Row(children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Iconsax.clock, size: 18, color: kTealDeep),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('В очереди ${n >= 200 ? '200+' : '$n'}',
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: kInk)),
+              Text('Уйдут сами, не быстрее ${lim.hourLimit} сообщений в час',
+                  style: const TextStyle(fontSize: 12, color: kSub)),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -433,14 +469,14 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
     );
   }
 
-  /// Белый список: номера клиники, которые менеджеру можно писать клиентам.
+  /// Настройки контроля: лимит темпа и свои номера.
   Future<void> _editAllowed() async {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
-      builder: (_) => const _AllowedPhonesSheet(),
+      builder: (_) => const _ControlSettingsSheet(),
     );
   }
 
@@ -467,15 +503,16 @@ class _RiskScreenState extends ConsumerState<RiskScreen> {
       '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 }
 
-/// Редактор белого списка номеров (config/risk.allowedPhones).
-class _AllowedPhonesSheet extends ConsumerStatefulWidget {
-  const _AllowedPhonesSheet();
+/// Настройки контроля: лимит темпа отправки + белый список номеров
+/// (config/risk). Правит только админ — правила Firestore это закрывают.
+class _ControlSettingsSheet extends ConsumerStatefulWidget {
+  const _ControlSettingsSheet();
 
   @override
-  ConsumerState<_AllowedPhonesSheet> createState() => _AllowedPhonesSheetState();
+  ConsumerState<_ControlSettingsSheet> createState() => _ControlSettingsSheetState();
 }
 
-class _AllowedPhonesSheetState extends ConsumerState<_AllowedPhonesSheet> {
+class _ControlSettingsSheetState extends ConsumerState<_ControlSettingsSheet> {
   final _ctrl = TextEditingController();
   bool _busy = false;
 
@@ -494,13 +531,68 @@ class _AllowedPhonesSheetState extends ConsumerState<_AllowedPhonesSheet> {
     }
   }
 
+  Future<void> _saveLimits(SendLimits l) async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(riskServiceProvider).setLimits(l);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Шаговый выбор числа (менеджерам и админу удобнее, чем клавиатура).
+  Widget _stepper({
+    required String label,
+    required String hint,
+    required int value,
+    required int step,
+    required int min,
+    required int max,
+    required ValueChanged<int> onChange,
+  }) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kInk)),
+              Text(hint, style: const TextStyle(fontSize: 11.5, color: kSub)),
+            ]),
+          ),
+          _stepBtn(Icons.remove_rounded, _busy || value <= min ? null : () => onChange((value - step).clamp(min, max))),
+          SizedBox(
+            width: 56,
+            child: Text('$value',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: kInk)),
+          ),
+          _stepBtn(Icons.add_rounded, _busy || value >= max ? null : () => onChange((value + step).clamp(min, max))),
+        ]),
+      );
+
+  Widget _stepBtn(IconData icon, VoidCallback? onTap) => Material(
+        color: const Color(0xFFF2F6F5),
+        borderRadius: BorderRadius.circular(11),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(11),
+          onTap: onTap,
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Icon(icon, size: 18, color: onTap == null ? kSub.withValues(alpha: 0.4) : kTealDeep),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final phones = ref.watch(allowedPhonesProvider).value ?? const <String>[];
+    final lim = ref.watch(sendLimitsProvider).value ?? const SendLimits();
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 14, 20, MediaQuery.of(context).viewInsets.bottom + 18),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Center(
             child: Container(
               width: 38,
@@ -508,6 +600,55 @@ class _AllowedPhonesSheetState extends ConsumerState<_AllowedPhonesSheet> {
               decoration: BoxDecoration(color: const Color(0xFFE2E8E6), borderRadius: BorderRadius.circular(2)),
             ),
           ),
+          const SizedBox(height: 16),
+          const Text('Лимит темпа', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kInk)),
+          const SizedBox(height: 4),
+          const Text(
+            'Сверх лимита сообщения не теряются — они встают в очередь и уходят сами, ровным темпом.',
+            style: TextStyle(fontSize: 12.5, color: kSub, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            activeThumbColor: kTealDeep,
+            value: lim.enabled,
+            onChanged: _busy ? null : (v) => _saveLimits(lim.copyWith(enabled: v)),
+            title: const Text('Ограничивать отправку',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kInk)),
+            subtitle: const Text('Выключать не советую — именно всплески привели к бану',
+                style: TextStyle(fontSize: 11.5, color: kSub)),
+          ),
+          const SizedBox(height: 6),
+          _stepper(
+            label: 'В час',
+            hint: 'было до 312 — безопасно 100–150',
+            value: lim.hourLimit,
+            step: 10,
+            min: 10,
+            max: 400,
+            onChange: (v) => _saveLimits(lim.copyWith(hourLimit: v)),
+          ),
+          _stepper(
+            label: 'В сутки',
+            hint: 'было до 2664 — безопасно 700–1000',
+            value: lim.dayLimit,
+            step: 50,
+            min: 50,
+            max: 3000,
+            onChange: (v) => _saveLimits(lim.copyWith(dayLimit: v)),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            activeThumbColor: kTealDeep,
+            value: lim.queueMass,
+            onChanged: _busy ? null : (v) => _saveLimits(lim.copyWith(queueMass: v)),
+            title: const Text('Одинаковый текст — через очередь',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kInk)),
+            subtitle: const Text('С 5-го адресата подряд текст рассылается с паузами',
+                style: TextStyle(fontSize: 11.5, color: kSub)),
+          ),
+          const SizedBox(height: 10),
+          Container(height: 1, color: Colors.black.withValues(alpha: 0.06)),
           const SizedBox(height: 16),
           const Text('Свои номера', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kInk)),
           const SizedBox(height: 4),
@@ -570,7 +711,8 @@ class _AllowedPhonesSheetState extends ConsumerState<_AllowedPhonesSheet> {
               child: const Text('Добавить', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
             ),
           ]),
-        ]),
+          ]),
+        ),
       ),
     );
   }

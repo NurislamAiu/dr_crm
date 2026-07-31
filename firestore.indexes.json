@@ -34,6 +34,14 @@
       ]
     },
     {
+      "collectionGroup": "outbox",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "riskEvents",
       "queryScope": "COLLECTION",
       "fields": [

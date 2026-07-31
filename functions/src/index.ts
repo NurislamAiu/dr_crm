@@ -7,6 +7,7 @@ import * as admin from "firebase-admin";
 import { randomUUID, createHmac } from "crypto";
 import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, wazzupEditText, wazzupDeleteMessage, type WazzupMessage, type WazzupStatus } from "./wazzup";
 import { auditOutbound, dayKey, fingerprint, hasLink, isNight, loadAllowedPhones, logRisk, peekChat, textFlags, type RiskKind } from "./risk";
+import { enqueue, gateSend, limits, reserveSlot } from "./limits";
 
 admin.initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
@@ -520,7 +521,7 @@ async function sendOutboundText(
   apiKey: string,
   channelId: string,
   p: { phone: string; text: string; name?: string; authorId: string; refMessageId?: string; replyToText?: string; isBroadcast?: boolean },
-): Promise<string> {
+): Promise<{ messageId: string; queued: boolean }> {
   const chatId = normalizeChatId("whatsapp", p.phone);
   const text = p.text.trim();
   if (!chatId || !text) throw new Error("phone и text обязательны");
@@ -529,6 +530,29 @@ async function sendOutboundText(
   const pre = p.isBroadcast ? null : await peekChat(chatId);
 
   const crmMessageId = randomUUID();
+
+  // Лимит темпа: сверх нормы (или «один текст многим») — в очередь.
+  const gate = await gateSend({ authorId: p.authorId, chatId, text, broadcast: p.isBroadcast });
+  if (!gate.send) {
+    // Рассылка сама себе очередь: пусть попробует в следующую минуту.
+    if (p.isBroadcast) throw new Error("RATE_LIMIT");
+    await enqueue({
+      kind: "text",
+      chatId,
+      text,
+      name: p.name,
+      authorId: p.authorId,
+      refMessageId: p.refMessageId,
+      replyToText: p.replyToText,
+      crmMessageId,
+      reason: gate.reason,
+    });
+    if (pre) {
+      await auditOutbound({ authorId: p.authorId, chatId, text, messageId: crmMessageId, cold: pre.cold, flags: gate.flags });
+    }
+    return { messageId: crmMessageId, queued: true };
+  }
+
   const result = await wazzupSendText(apiKey, {
     channelId,
     chatId,
@@ -575,16 +599,16 @@ async function sendOutboundText(
 
   // Контроль подозрительной активности (не ломает отправку при ошибке).
   if (pre) {
-    await auditOutbound({ authorId: p.authorId, chatId, text, messageId, cold: pre.cold });
+    await auditOutbound({ authorId: p.authorId, chatId, text, messageId, cold: pre.cold, flags: gate.flags });
   }
-  return messageId;
+  return { messageId, queued: false };
 }
 
 export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
   const data = (request.data ?? {}) as { phone?: string; text?: string; name?: string; refMessageId?: string; replyToText?: string };
   try {
-    const messageId = await sendOutboundText(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value(), {
+    const res = await sendOutboundText(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value(), {
       phone: String(data.phone ?? ""),
       text: data.text ?? "",
       name: data.name,
@@ -592,7 +616,7 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
       refMessageId: (data.refMessageId ?? "").trim() || undefined,
       replyToText: data.replyToText,
     });
-    return { ok: true, messageId };
+    return { ok: true, messageId: res.messageId, queued: res.queued };
   } catch (e) {
     throw new HttpsError("invalid-argument", String(e instanceof Error ? e.message : e));
   }
@@ -735,7 +759,13 @@ export const processBroadcasts = onSchedule(
         });
         rows[idx] = { ...row, status: "sent", variant: vIdx + 1 };
       } catch (e) {
-        rows[idx] = { ...row, status: "failed", variant: vIdx + 1, error: String(e instanceof Error ? e.message : e).slice(0, 200) };
+        const msg = String(e instanceof Error ? e.message : e);
+        // Упёрлись в лимит темпа — строка остаётся pending, дошлём позже.
+        if (msg.includes("RATE_LIMIT")) {
+          await ref.update({ waitingLimit: true, updatedAt: ts() });
+          return;
+        }
+        rows[idx] = { ...row, status: "failed", variant: vIdx + 1, error: msg.slice(0, 200) };
       }
       const sent = rows.filter((r) => r.status === "sent").length;
       const failed = rows.filter((r) => r.status === "failed").length;
@@ -747,6 +777,86 @@ export const processBroadcasts = onSchedule(
         return;
       }
       if (Date.now() - startedAt > 80_000) return;
+    }
+  },
+);
+
+/**
+ * Досылка очереди: раз в минуту берёт накопившиеся сообщения и отправляет их
+ * ровным темпом, пока есть запас по лимиту канала. Так серия однотипных
+ * сообщений растягивается во времени вместо всплеска, за который банят.
+ * maxInstances 1 — очередь разбирает ровно один обработчик.
+ */
+export const processOutbox = onSchedule(
+  { schedule: "every 1 minutes", secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, WAZZUP_WEBHOOK_SECRET], timeoutSeconds: 120, maxInstances: 1 },
+  async () => {
+    const firestore = db();
+    const lim = await limits();
+    const snap = await firestore
+      .collection("outbox")
+      .where("status", "==", "pending")
+      .orderBy("createdAt", "asc")
+      .limit(30)
+      .get();
+    if (snap.empty) return;
+
+    const startedAt = Date.now();
+    for (const doc of snap.docs) {
+      if (Date.now() - startedAt > 85_000) return;
+      const slot = await reserveSlot();
+      if (!slot.allow) return; // лимит исчерпан — продолжим через минуту
+
+      const it = doc.data() as Record<string, unknown>;
+      const chatId = String(it.chatId ?? "");
+      const crmMessageId = String(it.crmMessageId ?? doc.id);
+      try {
+        let messageId = crmMessageId;
+        if (it.kind === "media") {
+          const mediaPath = String(it.mediaPath ?? "");
+          const tok = mediaToken(mediaPath, WAZZUP_WEBHOOK_SECRET.value());
+          const res = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
+            channelId: WAZZUP_CHANNEL_ID.value(),
+            chatId,
+            chatType: "whatsapp",
+            contentUri: `${REGION_HOST}/mediaContent?path=${mediaPath}&t=${tok}`,
+            crmMessageId,
+          });
+          messageId = String(res.messageId ?? crmMessageId);
+        } else {
+          const res = await wazzupSendText(WAZZUP_API_KEY.value(), {
+            channelId: WAZZUP_CHANNEL_ID.value(),
+            chatId,
+            chatType: "whatsapp",
+            text: String(it.text ?? ""),
+            crmMessageId,
+            refMessageId: (it.refMessageId as string | undefined) || undefined,
+          });
+          messageId = String(res.messageId ?? crmMessageId);
+        }
+
+        await doc.ref.set({ status: "sent", sentAt: ts() }, { merge: true });
+        // createdAt = момент реальной отправки: и в чате порядок верный, и
+        // дедуп эха вебхука (окно 5 минут) срабатывает.
+        await firestore.collection("messages").doc(crmMessageId).set(
+          { externalMessageId: messageId, status: "sent", queued: false, createdAt: ts() },
+          { merge: true },
+        );
+        await firestore.collection("conversations").doc(chatId).set(
+          { lastMessageAt: ts(), updatedAt: ts() },
+          { merge: true },
+        );
+      } catch (e) {
+        const attempts = Number(it.attempts ?? 0) + 1;
+        const failed = attempts >= 3;
+        await doc.ref.set(
+          { attempts, error: String(e instanceof Error ? e.message : e).slice(0, 200), ...(failed ? { status: "failed" } : {}) },
+          { merge: true },
+        );
+        if (failed) {
+          await firestore.collection("messages").doc(crmMessageId).set({ status: "failed", queued: false }, { merge: true });
+        }
+      }
+      await sleep(lim.drainGapSec * 1000);
     }
   },
 );
@@ -772,6 +882,25 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
 
   const pre = await peekChat(chatId);
   const crmMessageId = randomUUID();
+
+  // Тот же лимит темпа, что и для текста (правило «одинаковый текст» к медиа
+  // не применяем — это разные файлы).
+  const gate = await gateSend({ authorId: request.auth.uid, chatId, text: `[${type}]`, skipMass: true });
+  if (!gate.send) {
+    await enqueue({
+      kind: "media",
+      chatId,
+      name: data.name,
+      authorId: request.auth.uid,
+      mediaPath,
+      mediaUrl,
+      mediaType: type,
+      crmMessageId,
+      reason: gate.reason,
+    });
+    return { ok: true, messageId: crmMessageId, queued: true };
+  }
+
   const result = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
     channelId: WAZZUP_CHANNEL_ID.value(),
     chatId,
@@ -818,8 +947,9 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
     text: `[${type}]`,
     messageId,
     cold: pre.cold,
+    flags: gate.flags,
   });
-  return { ok: true, messageId };
+  return { ok: true, messageId, queued: false };
 });
 
 /** Редактирование своего сообщения (callable, §16): PATCH Wazzup + Firestore. */
@@ -829,7 +959,10 @@ export const editMessage = onCall({ secrets: [WAZZUP_API_KEY] }, async (request)
   const messageId = (data.messageId ?? "").trim();
   const text = (data.text ?? "").trim();
   if (!messageId || !text) throw new HttpsError("invalid-argument", "messageId и text обязательны");
-  await wazzupEditText(WAZZUP_API_KEY.value(), messageId, text);
+  // У сообщений из очереди id документа — наш, в Wazzup нужен externalMessageId.
+  const doc = (await db().collection("messages").doc(messageId).get()).data();
+  const external = String(doc?.externalMessageId ?? messageId);
+  await wazzupEditText(WAZZUP_API_KEY.value(), external, text);
   await db().collection("messages").doc(messageId).set({ text, isEdited: true, updatedAt: ts() }, { merge: true });
   return { ok: true };
 });
@@ -842,7 +975,16 @@ export const deleteMessage = onCall({ secrets: [WAZZUP_API_KEY] }, async (reques
   if (!messageId) throw new HttpsError("invalid-argument", "messageId обязателен");
   // Текст читаем ДО удаления — иначе в журнале останется пустое событие.
   const before = (await db().collection("messages").doc(messageId).get()).data();
-  await wazzupDeleteMessage(WAZZUP_API_KEY.value(), messageId);
+  // Сообщение ещё в очереди — просто снимаем с отправки.
+  if (before?.status === "queued") {
+    await db().collection("outbox").doc(messageId).set({ status: "cancelled" }, { merge: true });
+    await db().collection("messages").doc(messageId).set(
+      { isDeleted: true, text: null, status: "cancelled", queued: false, updatedAt: ts() },
+      { merge: true },
+    );
+    return { ok: true, cancelled: true };
+  }
+  await wazzupDeleteMessage(WAZZUP_API_KEY.value(), String(before?.externalMessageId ?? messageId));
   await db().collection("messages").doc(messageId).set(
     { isDeleted: true, text: null, mediaUrl: null, contentUri: null, updatedAt: ts() },
     { merge: true },

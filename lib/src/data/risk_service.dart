@@ -61,6 +61,45 @@ class RiskEvent {
   }
 }
 
+/// Настройки лимита темпа отправки (config/risk).
+class SendLimits {
+  const SendLimits({
+    this.enabled = true,
+    this.hourLimit = 120,
+    this.dayLimit = 900,
+    this.queueMass = true,
+  });
+
+  /// Лимит включён (сверх нормы сообщения уходят через очередь).
+  final bool enabled;
+  final int hourLimit;
+  final int dayLimit;
+
+  /// Одинаковый текст 5+ адресатам — тоже через очередь.
+  final bool queueMass;
+
+  SendLimits copyWith({bool? enabled, int? hourLimit, int? dayLimit, bool? queueMass}) => SendLimits(
+        enabled: enabled ?? this.enabled,
+        hourLimit: hourLimit ?? this.hourLimit,
+        dayLimit: dayLimit ?? this.dayLimit,
+        queueMass: queueMass ?? this.queueMass,
+      );
+
+  static SendLimits fromMap(Map<String, dynamic> d) => SendLimits(
+        enabled: d['limitEnabled'] != false,
+        hourLimit: (d['hourLimit'] as num?)?.toInt() ?? 120,
+        dayLimit: (d['dayLimit'] as num?)?.toInt() ?? 900,
+        queueMass: d['queueMass'] != false,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'limitEnabled': enabled,
+        'hourLimit': hourLimit,
+        'dayLimit': dayLimit,
+        'queueMass': queueMass,
+      };
+}
+
 /// Чтение журнала подозрительной активности.
 class RiskService {
   RiskService({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
@@ -77,6 +116,20 @@ class RiskService {
 
   Future<void> setAllowedPhones(List<String> phones) =>
       _cfg.set({'allowedPhones': phones}, SetOptions(merge: true));
+
+  /// Лимит темпа отправки.
+  Stream<SendLimits> watchLimits() => _cfg.snapshots().map((s) => SendLimits.fromMap(s.data() ?? {}));
+
+  Future<void> setLimits(SendLimits l) => _cfg.set(l.toMap(), SetOptions(merge: true));
+
+  /// Сколько сообщений ждёт отправки в очереди (limit(200) — счётчик, а не
+  /// список, больше двух сотен показываем как «200+»).
+  Stream<int> watchQueueSize() => _db
+      .collection('outbox')
+      .where('status', isEqualTo: 'pending')
+      .limit(200)
+      .snapshots()
+      .map((s) => s.size);
 
   /// События за период; [until] — верхняя граница (для одного дня),
   /// [uid] — только по одному менеджеру.

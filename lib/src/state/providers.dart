@@ -111,6 +111,14 @@ final riskEventsProvider =
 final allowedPhonesProvider =
     StreamProvider<List<String>>((ref) => ref.watch(riskServiceProvider).watchAllowedPhones());
 
+/// Лимит темпа отправки (config/risk).
+final sendLimitsProvider =
+    StreamProvider<SendLimits>((ref) => ref.watch(riskServiceProvider).watchLimits());
+
+/// Сколько сообщений ждёт в очереди отправки.
+final queueSizeProvider =
+    StreamProvider.autoDispose<int>((ref) => ref.watch(riskServiceProvider).watchQueueSize());
+
 /// Серверная рассылка.
 final broadcastRepositoryProvider = Provider<BroadcastRepository>((_) => BroadcastRepository());
 

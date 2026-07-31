@@ -120,6 +120,20 @@ export const loadAllowedPhones = () => allowedPhones();
 /** Локальный день YYYY-MM-DD (Астана) — для группировки. */
 export const dayKey = (d: Date) => localDayKey(d);
 
+/**
+ * Признаки темпа по истории отправок менеджера: «одинаковый текст многим»
+ * и «слишком быстро». Считается ДО отправки — по ним решается, ставить ли
+ * сообщение в очередь.
+ */
+export function paceFlags(recent: Recent[], hash: string, text: string, nowMs: number): RiskKind[] {
+  const kinds: RiskKind[] = [];
+  const same = new Set(recent.filter((r) => r.h === hash && nowMs - r.t < MASS_WINDOW_MS).map((r) => r.c));
+  if (text.trim().length > 0 && same.size >= MASS_LIMIT) kinds.push("mass");
+  const burst = new Set(recent.filter((r) => nowMs - r.t < BURST_WINDOW_MS).map((r) => r.c));
+  if (burst.size > BURST_LIMIT) kinds.push("burst");
+  return kinds;
+}
+
 // ── Кэши (живут в инстансе функции, экономят чтения) ──────────────────────
 const nameCache = new Map<string, { name: string; at: number }>();
 let allowCache: { phones: string[]; at: number } | null = null;
@@ -161,7 +175,7 @@ type Recent = { c: string; h: string; t: number };
  * Дописывает отправку в riskState/{uid} и возвращает свежую историю
  * (последний час). Одно чтение + одна запись.
  */
-async function pushRecent(uid: string, chatId: string, hash: string): Promise<Recent[]> {
+export async function pushRecent(uid: string, chatId: string, hash: string): Promise<Recent[]> {
   const ref = db().doc(`riskState/${uid}`);
   const now = Date.now();
   let recent: Recent[] = [];
@@ -253,23 +267,21 @@ export async function auditOutbound(p: {
   text: string;
   messageId: string;
   cold: boolean;
+  /** Признаки темпа, посчитанные лимитером до отправки (mass/burst). */
+  flags?: RiskKind[];
 }): Promise<void> {
   try {
     const uid = p.authorId;
     if (!uid || uid === "auto") return;
     const text = p.text ?? "";
-    const kinds: RiskKind[] = [];
+    const kinds: RiskKind[] = [...(p.flags ?? [])];
 
-    // Темп и «ручная рассылка» — по истории отправок менеджера.
-    const hash = textKey(text);
-    const recent = await pushRecent(uid, p.chatId, hash);
-    const now = Date.now();
-    const sameText = new Set(
-      recent.filter((r) => r.h === hash && now - r.t < MASS_WINDOW_MS).map((r) => r.c),
-    );
-    if (text.trim().length > 0 && sameText.size >= MASS_LIMIT) kinds.push("mass");
-    const burst = new Set(recent.filter((r) => now - r.t < BURST_WINDOW_MS).map((r) => r.c));
-    if (burst.size > BURST_LIMIT) kinds.push("burst");
+    // Если лимитер не отработал (медиа мимо очереди) — считаем темп здесь.
+    if (p.flags == null) {
+      const hash = textKey(text);
+      const recent = await pushRecent(uid, p.chatId, hash);
+      kinds.push(...paceFlags(recent, hash, text, Date.now()));
+    }
 
     if (p.cold) kinds.push("cold");
 

@@ -118,6 +118,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Очередь отправки: менеджеры видят, сколько ждёт отправки; наполняет и
+    // разбирает её только сервер.
+    match /outbox/{id} {
+      allow read: if isManager();
+      allow write: if false;
+    }
+
     // Всё остальное — запрещено.
     match /{document=**} {
       allow read, write: if false;

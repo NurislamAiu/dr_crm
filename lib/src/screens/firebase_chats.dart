@@ -1016,7 +1016,10 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   }
 
   void _showMessageActions(FsMessage m) {
-    final canEditDelete = m.isOutbound && !m.isDeleted && (m.status == 'sent' || m.status == 'delivered' || m.status == 'read' || m.status == 'accepted');
+    // Сообщение в очереди ещё не ушло — его можно только снять с отправки.
+    final canEditDelete = m.isOutbound &&
+        !m.isDeleted &&
+        (m.status == 'sent' || m.status == 'delivered' || m.status == 'read' || m.status == 'accepted' || m.status == 'queued');
     if (m.isDeleted) return;
     showModalBottomSheet<void>(
       context: context,
@@ -1422,11 +1425,19 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
                 Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
                 if (out && !deleted) ...[
                   const SizedBox(width: 3),
-                  Icon(
-                    m.status == 'read' ? Icons.done_all : (m.status == 'delivered' ? Icons.done_all : Icons.check),
-                    size: 13,
-                    color: m.status == 'read' ? const Color(0xFFBEEFFF) : metaColor,
-                  ),
+                  // «queued» — придержано лимитом темпа, уйдёт в ближайшие минуты.
+                  if (m.status == 'queued')
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.schedule_rounded, size: 12, color: metaColor),
+                      const SizedBox(width: 3),
+                      Text('в очереди', style: TextStyle(fontSize: 10, color: metaColor)),
+                    ])
+                  else
+                    Icon(
+                      m.status == 'read' ? Icons.done_all : (m.status == 'delivered' ? Icons.done_all : Icons.check),
+                      size: 13,
+                      color: m.status == 'read' ? const Color(0xFFBEEFFF) : metaColor,
+                    ),
                 ],
               ]),
             ),
