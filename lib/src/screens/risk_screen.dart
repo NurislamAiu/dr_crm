@@ -694,21 +694,28 @@ class _ControlSettingsSheetState extends ConsumerState<_ControlSettingsSheet> {
               ),
             ),
             const SizedBox(width: 10),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: kTealDeep,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            // Ширину задаём явно: тема кнопок тянет их на всю строку, а в Row
+            // ширина не ограничена — иначе падает с «forces an infinite width».
+            SizedBox(
+              width: 118,
+              height: 50,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: kTealDeep,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(118, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+                onPressed: _busy
+                    ? null
+                    : () {
+                        final v = _ctrl.text.replaceAll(RegExp(r'\D'), '');
+                        if (v.length < 10 || phones.contains(v)) return;
+                        _ctrl.clear();
+                        _save([...phones, v]);
+                      },
+                child: const Text('Добавить', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
               ),
-              onPressed: _busy
-                  ? null
-                  : () {
-                      final v = _ctrl.text.replaceAll(RegExp(r'\D'), '');
-                      if (v.length < 10 || phones.contains(v)) return;
-                      _ctrl.clear();
-                      _save([...phones, v]);
-                    },
-              child: const Text('Добавить', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
             ),
           ]),
           ]),
