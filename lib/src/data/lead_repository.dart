@@ -1,6 +1,4 @@
-import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_core/firebase_core.dart';
 
 import '../models/lead.dart';
 
@@ -22,15 +20,12 @@ class LeadRepository {
       final snap = await _counter.get();
       return ((snap.data()?['value'] as num?)?.toInt() ?? 0) + 1;
     } catch (e) {
-      debugPrint('[LEAD] peekNextNumber ошибка: $e');
       return 1;
     }
   }
 
   /// Создать лид, присвоив следующий номер атомарно. Возвращает номер.
   Future<int> create(Lead lead, {required String? createdBy}) async {
-    debugPrint('[LEAD] ── создание лида ──────────────');
-    debugPrint('[LEAD] Firebase apps: ${Firebase.apps.length}');
     try {
       final assignedNumber = await _db.runTransaction<int>((tx) async {
         final snap = await tx.get(_counter);
@@ -46,14 +41,10 @@ class LeadRepository {
         tx.set(leadRef, data);
         return next;
       });
-      debugPrint('[LEAD] ✅ сохранён лид №$assignedNumber');
       return assignedNumber;
-    } on FirebaseException catch (e, st) {
-      debugPrint('[LEAD] ❌ FirebaseException code=${e.code} message=${e.message}');
+    } on FirebaseException catch (e) {
       if (e.code == 'permission-denied') {
-        debugPrint('[LEAD]    → правила Firestore запрещают запись (нужен test-режим / write).');
       }
-      debugPrint('$st');
       rethrow;
     }
   }

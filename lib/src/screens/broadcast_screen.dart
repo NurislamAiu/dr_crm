@@ -1,30 +1,77 @@
-import 'dart:async';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:iconsax/iconsax.dart';
 
+import '../data/broadcast_repository.dart';
 import '../state/providers.dart';
-import '../theme/app_theme.dart';
+import 'soft_ui.dart';
 
-const _phone = '+7 777 175 44 45';
+const _pageBg = Color(0xFFF1F8F6);
 
-/// 10 вариантов текста — каждому контакту уходит по очереди, чтобы WhatsApp
+/// 55 вариантов текста — каждому контакту уходит свой, чтобы WhatsApp
 /// не принял одинаковые сообщения за спам. Переменные {name} и {date}.
 const _defaultVariants = <String>[
-  'Здравствуйте, {name}!\nDR.TOITAYEV: напоминаем, что {date} у Вас запись к врачу.\nДля подтверждения, переноса или отмены записи напишите нам в WhatsApp или на рабочий номер клиники $_phone',
-  'Добрый день, {name}!\nКлиника DR.TOITAYEV напоминает о Вашем приёме {date}. Подтвердить, перенести или отменить визит можно ответом в этот чат или по номеру $_phone',
-  '{name}, здравствуйте!\nНапоминаем, что {date} Вас ждёт приём у врача в клинике DR.TOITAYEV. Подтвердить или изменить запись — напишите в WhatsApp либо позвоните: $_phone',
-  'Здравствуйте, {name}!\nЭто клиника DR.TOITAYEV. Ваш приём назначен на {date}. Пожалуйста, подтвердите визит — а если нужно перенести или отменить, напишите нам сюда или на $_phone',
-  'Добрый день, {name}!\nНапоминаем: {date} у Вас визит к врачу в DR.TOITAYEV. Для подтверждения, переноса или отмены ответьте в этот чат или позвоните $_phone',
-  '{name}, добрый день!\nКлиника DR.TOITAYEV ждёт Вас на приёме {date}. Чтобы подтвердить запись, перенести или отменить — свяжитесь с нами в WhatsApp или по телефону $_phone',
-  'Здравствуйте, {name}!\nНапоминаем о Вашей записи к врачу {date} (DR.TOITAYEV). Подтвердите, пожалуйста, визит. По вопросам переноса и отмены — WhatsApp или номер клиники $_phone',
-  'Уважаемый(ая) {name}!\nНапоминаем, что {date} у Вас запланирован приём в клинике DR.TOITAYEV. Подтвердить или изменить запись можно здесь в WhatsApp или по номеру $_phone',
-  'Здравствуйте, {name}!\nDR.TOITAYEV напоминает: приём у врача — {date}. Просим подтвердить визит. Перенос или отмена — напишите нам в WhatsApp либо позвоните $_phone',
-  'Добрый день, {name}!\nЖдём Вас {date} на приёме в клинике DR.TOITAYEV. Для подтверждения, переноса или отмены записи ответьте в этот чат или на рабочий номер $_phone',
+  'Здравствуйте, {name}!\nDR.TOITAYEV: напоминаем, что {date} у Вас запись к врачу.\nДля подтверждения, переноса или отмены записи просто ответьте на это сообщение.',
+  'Добрый день, {name}!\nКлиника DR.TOITAYEV напоминает о Вашем приёме {date}. Подтвердить, перенести или отменить визит можно ответом в этот чат.',
+  '{name}, здравствуйте!\nНапоминаем, что {date} Вас ждёт приём у врача в клинике DR.TOITAYEV. Чтобы подтвердить или изменить запись — напишите нам в WhatsApp.',
+  'Здравствуйте, {name}!\nЭто клиника DR.TOITAYEV. Ваш приём назначен на {date}. Пожалуйста, подтвердите визит ответным сообщением.',
+  'Добрый день, {name}!\nНапоминаем: {date} у Вас визит к врачу в DR.TOITAYEV. Для подтверждения, переноса или отмены ответьте в этот чат.',
+  '{name}, добрый день!\nКлиника DR.TOITAYEV ждёт Вас на приёме {date}. Чтобы подтвердить запись — просто напишите нам.',
+  'Здравствуйте, {name}!\nНапоминаем о Вашей записи к врачу {date} (DR.TOITAYEV). Подтвердите, пожалуйста, визит ответным сообщением.',
+  'Уважаемый(ая) {name}!\nНапоминаем, что {date} у Вас запланирован приём в клинике DR.TOITAYEV. Подтвердить или изменить запись можно здесь, в WhatsApp.',
+  'Здравствуйте, {name}!\nDR.TOITAYEV напоминает: приём у врача — {date}. Просим подтвердить визит ответом в этот чат.',
+  'Добрый день, {name}!\nЖдём Вас {date} на приёме в клинике DR.TOITAYEV. Для подтверждения или переноса ответьте на это сообщение.',
+  '{name}, здравствуйте!\nВаша запись в клинику DR.TOITAYEV — {date}. Будете? Ответьте, пожалуйста, на это сообщение.',
+  'Здравствуйте, {name}!\nПодтвердите, пожалуйста, Вашу запись на {date} в клинике DR.TOITAYEV — достаточно ответить «+» на это сообщение.',
+  'Добрый день, {name}!\nЭто DR.TOITAYEV. Напоминаем про Ваш визит {date}. Если планы изменились — напишите нам, перенесём на удобное время.',
+  '{name}, добрый день!\nПодтверждаете запись на {date}? Клиника DR.TOITAYEV. Ответьте «+», если будете, или напишите, если нужно перенести.',
+  'Здравствуйте, {name}!\nВаш приём в DR.TOITAYEV состоится {date}. Пожалуйста, дайте знать ответным сообщением, всё ли в силе.',
+  'Добрый день, {name}!\nКлиника DR.TOITAYEV: у Вас запись {date}. Просим подтвердить визит или сообщить о переносе ответом в чат.',
+  '{name}, здравствуйте!\nПишем из клиники DR.TOITAYEV: напоминаем про приём {date}. Ждём Ваше подтверждение в ответном сообщении.',
+  'Здравствуйте, {name}!\nНебольшое напоминание от DR.TOITAYEV — Ваш визит к врачу назначен на {date}. Подтвердите, пожалуйста, ответом.',
+  'Добрый день, {name}!\nНапоминаем Вам о записи в клинику DR.TOITAYEV {date}. Если всё в силе — ответьте «+». Если нет — напишите, подберём другое время.',
+  '{name}, добрый день!\nDR.TOITAYEV на связи: ждём Вас {date}. Подтвердите визит, пожалуйста, ответным сообщением.',
+  'Здравствуйте, {name}!\nПроверьте, пожалуйста: Ваш приём в клинике DR.TOITAYEV — {date}. Ответьте на сообщение, чтобы подтвердить.',
+  'Добрый день, {name}!\nУ Вас запись к врачу {date} в DR.TOITAYEV. Будем ждать! Если не получается прийти — предупредите нас ответом в чат.',
+  '{name}, здравствуйте!\nКлиника DR.TOITAYEV подтверждает Вашу запись: {date}. Пожалуйста, ответьте, если время остаётся удобным.',
+  'Здравствуйте, {name}!\n{date} у Вас приём в клинике DR.TOITAYEV. Просьба подтвердить визит любым ответом на это сообщение.',
+  'Добрый день, {name}!\nДружеское напоминание от клиники DR.TOITAYEV: визит к врачу — {date}. Ответьте «+», чтобы подтвердить.',
+  '{name}, добрый день!\nВаша запись: {date}, клиника DR.TOITAYEV. Подтвердите, пожалуйста, или напишите о переносе.',
+  'Здравствуйте, {name}!\nМы ждём Вас в DR.TOITAYEV {date}. Чтобы подтвердить запись, просто ответьте на это сообщение.',
+  'Добрый день, {name}!\nНапоминание: Ваш приём у врача клиники DR.TOITAYEV назначен на {date}. Подтвердите визит ответом в чат, пожалуйста.',
+  '{name}, здравствуйте!\nDR.TOITAYEV: подтверждаете ли Вы запись на {date}? Ответьте одним сообщением — «да» или «перенести».',
+  'Здравствуйте, {name}!\nУточняем Вашу запись в клинику DR.TOITAYEV на {date}. Пожалуйста, подтвердите её ответным сообщением.',
+  'Добрый день, {name}!\nВаш визит в DR.TOITAYEV уже скоро — {date}. Дайте, пожалуйста, знать, что будете.',
+  '{name}, добрый день!\nЗаписали Вас на {date} — клиника DR.TOITAYEV. Просим подтвердить визит в ответном сообщении.',
+  'Здравствуйте, {name}!\nНапоминаем о визите {date} в клинику DR.TOITAYEV. Если время неудобно — напишите, предложим другое.',
+  'Добрый день, {name}!\nКлиника DR.TOITAYEV ждёт Вас {date}. Подтвердить или перенести запись можно одним сообщением в этот чат.',
+  '{name}, здравствуйте!\nПожалуйста, подтвердите Ваш приём {date} в DR.TOITAYEV — ответа «+» будет достаточно.',
+  'Здравствуйте, {name}!\nУ Вас запланирован визит к врачу {date} (клиника DR.TOITAYEV). Ответьте, пожалуйста, чтобы мы знали, что Вы будете.',
+  'Добрый день, {name}!\nЭто администратор клиники DR.TOITAYEV. Напоминаю о Вашей записи {date}. Подтвердите, пожалуйста, ответом.',
+  '{name}, добрый день!\nХотим убедиться, что Ваш визит {date} в DR.TOITAYEV в силе. Ответьте на это сообщение, пожалуйста.',
+  'Здравствуйте, {name}!\nВаша запись в клинике DR.TOITAYEV назначена: {date}. Просим подтвердить или сообщить об изменениях.',
+  'Добрый день, {name}!\nСкоро Ваш приём — {date}, клиника DR.TOITAYEV. Будете? Ждём короткий ответ в этом чате.',
+  '{name}, здравствуйте!\nПодтвердите, пожалуйста, запись к врачу {date}. Клиника DR.TOITAYEV. Для переноса просто напишите нам.',
+  'Здравствуйте, {name}!\nКлиника DR.TOITAYEV приглашает Вас на приём {date}. Пожалуйста, подтвердите визит ответным сообщением.',
+  'Добрый день, {name}!\nНапоминаем: Ваша запись — {date}. DR.TOITAYEV. Если что-то поменялось, сообщите нам ответом в чат.',
+  '{name}, добрый день!\nЖдём Вас на приёме {date} в клинике DR.TOITAYEV. Одно ответное сообщение — и запись подтверждена.',
+  'Здравствуйте, {name}!\nПросим подтвердить Ваш визит в DR.TOITAYEV, назначенный на {date}. Ответьте «+» или напишите о переносе.',
+  'Добрый день, {name}!\nВаш приём в клинике DR.TOITAYEV — {date}. Подтвердите, пожалуйста, чтобы мы сохранили за Вами время.',
+  '{name}, здравствуйте!\nВремя Вашего визита в DR.TOITAYEV: {date}. Ответьте на сообщение, если всё в силе.',
+  'Здравствуйте, {name}!\nНапоминаем про запись {date} в клинику DR.TOITAYEV. Подтверждение — одним ответом в этот чат.',
+  'Добрый день, {name}!\nDR.TOITAYEV: Ваш визит назначен на {date}. Пожалуйста, подтвердите или предупредите о переносе.',
+  '{name}, добрый день!\nПроверяем записи на ближайшие дни: Ваша — {date}, клиника DR.TOITAYEV. Подтвердите, пожалуйста, ответом.',
+  'Здравствуйте, {name}!\nБудем рады видеть Вас {date} в клинике DR.TOITAYEV. Просим подтвердить визит ответным сообщением.',
+  'Добрый день, {name}!\nВаш приём у врача — {date}. Клиника DR.TOITAYEV. Ответьте «+», если будете, — так мы сохраним Ваше время.',
+  '{name}, здравствуйте!\nЗапись сохраняем за Вами: {date}, DR.TOITAYEV. Пожалуйста, ответьте, что придёте.',
+  'Здравствуйте, {name}!\nНапоминание о приёме: {date}, клиника DR.TOITAYEV. Если нужно перенести или отменить — просто напишите нам.',
+  'Добрый день, {name}!\nДо встречи {date} в DR.TOITAYEV! Подтвердите, пожалуйста, визит коротким ответом в этот чат.',
 ];
 
-/// Шаблон запроса предоплаты (реквизиты — точь-в-точь как дал клиент).
-const _paymentTemplate = '''Здравствуйте, для подтверждения записи необходимо внести предоплату
+/// 6 вариантов запроса предоплаты. Реквизиты во всех одинаковые — меняются
+/// только формулировки, чтобы WhatsApp не считал рассылку спамом.
+const _paymentVariants = <String>[
+  """Здравствуйте, {name}! Для подтверждения записи необходимо внести предоплату.
 
 ВТБ Россия
 
@@ -33,27 +80,67 @@ const _paymentTemplate = '''Здравствуйте, для подтвержд�
 ALIYA BAIKENOVA
 
 После внесения предоплаты отправьте чек, имя и контакт пациента.
-В случае отмены записи, предоплата не возвращается!''';
+В случае отмены записи предоплата не возвращается.""",
 
-const _delaySeconds = 20;
+  """{name}, добрый день! Чтобы закрепить за Вами время приёма, нужна предоплата.
+
+Реквизиты для перевода:
+ВТБ Россия
+2204 3603 0004 5901
+ALIYA BAIKENOVA
+
+После оплаты пришлите, пожалуйста, чек, имя и контакт пациента.
+Обратите внимание: при отмене записи предоплата не возвращается.""",
+
+  """Здравствуйте, {name}!
+Ваше время бронируется после предоплаты.
+
+Перевод на карту:
+ВТБ Россия
+2204 3603 0004 5901
+ALIYA BAIKENOVA
+
+Пришлите чек с именем и контактом пациента — и мы подтвердим запись.
+Предоплата при отмене не возвращается.""",
+
+  """Добрый день, {name}!
+Запись подтверждается после внесения предоплаты.
+
+ВТБ Россия
+2204 3603 0004 5901
+ALIYA BAIKENOVA
+
+Отправьте, пожалуйста, чек об оплате, имя и контакт пациента.
+Напоминаем: в случае отмены предоплата не возвращается.""",
+
+  """{name}, здравствуйте!
+Чтобы время осталось за Вами, просим внести предоплату.
+
+Куда переводить:
+ВТБ Россия
+2204 3603 0004 5901
+ALIYA BAIKENOVA
+
+Затем отправьте чек, имя и контакт пациента в этот чат.
+Предоплата не возвращается при отмене записи.""",
+
+  """Здравствуйте, {name}!
+Для брони приёма требуется предоплата.
+
+ВТБ Россия
+2204 3603 0004 5901
+ALIYA BAIKENOVA
+
+После перевода отправьте нам чек, имя и контакт пациента — запись будет подтверждена.
+При отмене записи предоплата не возвращается.""",
+];
 
 /// Как выбирать вариант текста для каждого контакта.
 enum _Mode { rotate, random, single }
 
-enum _St { pending, sending, sent, failed }
-
-class _Row {
-  _Row({required this.name, required this.phone, required this.date});
-  final String name;
-  final String phone;
-  final String date;
-  int variant = 0; // номер использованного варианта (1..N)
-  _St status = _St.pending;
-  String? error;
-}
-
-/// Экран массовой рассылки сервисных напоминаний (§14 — обычная отправка через
-/// Wazzup, пауза 20 c между контактами против блокировки номера).
+/// Экран массовой рассылки. Отправка — НА СЕРВЕРЕ (Cloud Function, пауза 20 c):
+/// после запуска приложение можно закрыть, прогресс приходит из Firestore,
+/// по завершении — пуш.
 class BroadcastScreen extends ConsumerStatefulWidget {
   const BroadcastScreen({super.key});
 
@@ -66,19 +153,13 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
       _defaultVariants.map((t) => TextEditingController(text: t)).toList();
   final _contacts = TextEditingController();
 
-  List<_Row> _rows = [];
-  bool _running = false;
-  bool _stop = false;
-  int _countdown = 0;
-  Timer? _timer;
-
   _Mode _mode = _Mode.rotate;
   int _singleIndex = 0; // выбранный вариант в режиме «Один»
-  final _rnd = Random();
+  bool _variantsExpanded = false; // свёрнутый список текстов (экономия места)
+  bool _starting = false;
 
   @override
   void dispose() {
-    _timer?.cancel();
     for (final c in _variants) {
       c.dispose();
     }
@@ -111,7 +192,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
     });
   }
 
-  List<_Row> _parse() {
+  List<({String name, String phone, String date})> _parse() {
     return _contacts.text
         .split('\n')
         .map((l) => l.trim())
@@ -119,7 +200,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
         .map((line) {
           final sep = line.contains(';') ? ';' : ',';
           final parts = line.split(sep);
-          return _Row(
+          return (
             name: parts.isNotEmpty ? parts[0].trim() : '',
             phone: parts.length > 1 ? parts[1].trim() : '',
             date: parts.length > 2 ? parts[2].trim() : '',
@@ -129,386 +210,504 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
         .toList();
   }
 
-  Future<void> _sleepCountdown() async {
-    final completer = Completer<void>();
-    _countdown = _delaySeconds;
-    if (mounted) setState(() {});
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      _countdown--;
-      if (_countdown <= 0 || _stop) {
-        t.cancel();
-        if (!completer.isCompleted) completer.complete();
-      }
-      if (mounted) setState(() {});
-    });
-    return completer.future;
-  }
-
-  Future<void> _start() async {
-    final rows = _parse();
-    final variants = _activeVariants();
-    if (rows.isEmpty || variants.isEmpty) return;
-    // В режиме «Один» берём выбранный вариант (если пуст — не стартуем).
-    final single = _mode == _Mode.single ? _variants[_singleIndex].text : null;
-    if (_mode == _Mode.single && (single == null || single.trim().isEmpty)) return;
-
-    setState(() {
-      _rows = rows;
-      _running = true;
-      _stop = false;
-    });
-    final firebase = ref.read(appConfigProvider).isFirebase;
-    final api = ref.read(apiClientProvider);
-    final chat = ref.read(firestoreChatRepositoryProvider);
-
-    for (var i = 0; i < rows.length; i++) {
-      if (_stop) break;
-      final String tpl;
-      final int vNum;
-      switch (_mode) {
-        case _Mode.single:
-          tpl = single!;
-          vNum = _singleIndex + 1;
-        case _Mode.random:
-          final k = _rnd.nextInt(variants.length);
-          tpl = variants[k];
-          vNum = k + 1;
-        case _Mode.rotate:
-          final k = i % variants.length;
-          tpl = variants[k];
-          vNum = k + 1;
-      }
-      setState(() {
-        rows[i].status = _St.sending;
-        rows[i].variant = vNum;
-      });
-      final text = tpl.replaceAll('{name}', rows[i].name).replaceAll('{date}', rows[i].date);
-      try {
-        if (firebase) {
-          // Firebase-режим: отправка через Cloud Function sendMessage.
-          await chat.sendText(phone: rows[i].phone, text: text, name: rows[i].name);
-          setState(() => rows[i].status = _St.sent);
-        } else {
-          final res = await api.broadcastSend(name: rows[i].name, phone: rows[i].phone, text: text);
-          final ok = res['ok'] == true;
-          setState(() {
-            rows[i].status = ok ? _St.sent : _St.failed;
-            rows[i].error = ok ? null : (res['error'] as String?);
-          });
-        }
-      } catch (e) {
-        setState(() {
-          rows[i].status = _St.failed;
-          rows[i].error = '$e';
-        });
-      }
-      if (i < rows.length - 1 && !_stop) await _sleepCountdown();
-    }
-    _timer?.cancel();
-    if (mounted) {
-      setState(() {
-        _running = false;
-        _countdown = 0;
-      });
-    }
-  }
-
-  void _stopRun() => setState(() => _stop = true);
-
-  @override
-  Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final parsedCount = _running ? _rows.length : _parse().length;
-    final sent = _rows.where((r) => r.status == _St.sent).length;
-    final failed = _rows.where((r) => r.status == _St.failed).length;
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Рассылка', style: TextStyle(fontWeight: FontWeight.w800))),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: dark ? const [Color(0xFF0E1519), Color(0xFF0B1013)] : const [Color(0xFFF4F7F8), Color(0xFFEDF2F2)],
-          ),
-        ),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
-          children: [
-            _hint(dark),
-            _variantsCard(dark),
-            _card(dark, 'Контакты', Icons.people_alt_rounded, [
-              Text('По одному в строке:  Имя;+7XXXXXXXXXX;дата',
-                  style: TextStyle(fontSize: 12, color: context.semantic.textSecondary)),
-              const SizedBox(height: 8),
-              _multiline(dark, _contacts, minLines: 5, mono: true, enabled: !_running,
-                  hint: 'Дархан;+77014004647;22 июля\nАйгуль;+77771234567;23 июля'),
-              const SizedBox(height: 8),
-              Text('Распознано: $parsedCount', style: const TextStyle(fontWeight: FontWeight.w600)),
-            ]),
-            const SizedBox(height: 4),
-            _actionBar(dark, parsedCount, sent, failed),
-            if (_rows.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              _progress(dark),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _hint(bool dark) => Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppColors.brand.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.brand.withValues(alpha: 0.25)),
-        ),
-        child: Row(children: [
-          const Icon(Icons.info_outline_rounded, size: 18, color: AppColors.brand),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text('Между сообщениями пауза 20 секунд — так WhatsApp не блокирует номер за массовую отправку.',
-                style: TextStyle(fontSize: 12.5, color: dark ? Colors.white70 : const Color(0xFF12403A))),
-          ),
-        ]),
-      );
-
   bool _canSend(int parsedCount) {
-    if (parsedCount == 0) return false;
+    if (parsedCount == 0 || _starting) return false;
     if (_mode == _Mode.single) {
       return _singleIndex < _variants.length && _variants[_singleIndex].text.trim().isNotEmpty;
     }
     return _activeVariants().isNotEmpty;
   }
 
-  Widget _modeChips() {
-    const items = [(_Mode.rotate, 'По очереди'), (_Mode.random, 'Рандом'), (_Mode.single, 'Один')];
-    return Wrap(
-      spacing: 8,
-      children: [
-        for (final (m, label) in items)
-          ChoiceChip(
-            label: Text(label),
-            selected: _mode == m,
-            onSelected: _running ? null : (_) => setState(() => _mode = m),
-            selectedColor: AppColors.brand.withValues(alpha: 0.18),
-            labelStyle: TextStyle(
-              fontWeight: _mode == m ? FontWeight.w700 : FontWeight.w500,
-              color: _mode == m ? AppColors.brand : null,
+  Future<void> _start() async {
+    final rows = _parse();
+    final variants = _activeVariants();
+    if (rows.isEmpty || variants.isEmpty) return;
+    final uid = ref.read(appConfigProvider).userId;
+    if (uid == null) return;
+
+    setState(() => _starting = true);
+    try {
+      await ref.read(broadcastRepositoryProvider).start(
+            createdBy: uid,
+            rows: rows,
+            variants: variants,
+            mode: _mode.name,
+            singleIndex: _singleIndex,
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            content: Text('Рассылка запущена на сервере — приложение можно закрыть. По завершении придёт пуш.'),
+            duration: Duration(seconds: 4),
+          ));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось запустить: $e')));
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
+
+  Future<void> _stop(BroadcastDoc b) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Остановить рассылку?'),
+        content: Text('Отправлено ${b.sent} из ${b.total}. Остальные не получат сообщение.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Продолжить рассылку')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFC6403C)),
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Остановить'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      try {
+        await ref.read(broadcastRepositoryProvider).stop(b.id);
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final b = ref.watch(latestBroadcastProvider).value;
+    final running = b?.isRunning == true;
+    final parsedCount = _parse().length;
+
+    return Scaffold(
+      backgroundColor: _pageBg,
+      body: Column(
+        children: [
+          SoftHeader(
+            color: kTeal,
+            colorDeep: kTealDeep,
+            title: 'Рассылка',
+            dateLabel: weekdayDateRu(DateTime.now()),
+            actions: const [],
+            strip: Row(children: [
+              HeaderStat(value: running ? '${b!.total}' : '$parsedCount', label: 'контактов'),
+              const SizedBox(width: 9),
+              HeaderStat(
+                value: b == null ? '—' : '${b.sent}✓ ${b.failed}✗',
+                label: 'отправлено',
+              ),
+              const SizedBox(width: 9),
+              HeaderStat(
+                value: running ? '${b!.pending}' : '20 c',
+                label: running ? 'осталось · сервер шлёт' : 'пауза (анти-бан)',
+              ),
+            ]),
+          ),
+          Expanded(
+            child: Container(
+              transform: Matrix4.translationValues(0, -22, 0),
+              decoration: const BoxDecoration(
+                color: _pageBg,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              ),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(15, 22, 15, 28),
+                children: [
+                  if (running) _serverBanner(),
+                  if (!running) ...[
+                    _variantsCard(),
+                    _contactsCard(parsedCount),
+                    const SizedBox(height: 4),
+                  ],
+                  _actionButton(b, running, parsedCount),
+                  if (b != null && b.rows.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    if (!running) _resultBanner(b),
+                    _progress(b),
+                  ],
+                ],
+              ),
             ),
           ),
-      ],
+        ],
+      ),
     );
   }
 
-  Widget _variantsCard(bool dark) {
-    final sec = context.semantic.textSecondary;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-      decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1B242B) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.045), blurRadius: 10, offset: const Offset(0, 3))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(
-            width: 28, height: 28,
-            decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
-            child: const Icon(Icons.message_rounded, size: 16, color: AppColors.brand),
-          ),
-          const SizedBox(width: 10),
-          Expanded(child: Text('Тексты — ${_variants.length} вар.', style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700))),
-        ]),
-        const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          Text('Пресет:', style: TextStyle(fontSize: 12.5, color: sec)),
-          ActionChip(
-            avatar: const Icon(Icons.notifications_active_outlined, size: 16, color: AppColors.brand),
-            label: const Text('Напоминания'),
-            onPressed: _running ? null : () => _loadPreset(_defaultVariants, single: false),
-          ),
-          ActionChip(
-            avatar: const Icon(Icons.credit_card_rounded, size: 16, color: Color(0xFFC97A0A)),
-            label: const Text('Предоплата'),
-            onPressed: _running ? null : () => _loadPreset(const [_paymentTemplate], single: true),
-          ),
-        ]),
-        const SizedBox(height: 10),
-        Text('Переменные: {name}, {date}', style: TextStyle(fontSize: 12, color: sec)),
-        const SizedBox(height: 10),
-        _modeChips(),
-        const SizedBox(height: 6),
-        Text(
-          switch (_mode) {
-            _Mode.single => 'Всем уходит один выбранный вариант (отметьте его ниже).',
-            _Mode.random => 'Каждому — случайный вариант из списка.',
-            _Mode.rotate => 'Каждому — следующий вариант по кругу.',
-          },
-          style: TextStyle(fontSize: 12, color: sec),
+  /// Плашка «идёт на сервере».
+  Widget _serverBanner() => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: kTeal.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: kTeal.withValues(alpha: 0.3)),
         ),
-        const SizedBox(height: 12),
-        for (var i = 0; i < _variants.length; i++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                if (_mode == _Mode.single) ...[
-                  GestureDetector(
-                    onTap: _running ? null : () => setState(() => _singleIndex = i),
-                    child: Icon(
-                      _singleIndex == i ? Icons.radio_button_checked : Icons.radio_button_off,
-                      size: 19,
-                      color: _singleIndex == i ? AppColors.brand : Colors.grey,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(7)),
-                  child: Text('Вариант ${i + 1}', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppColors.brand)),
-                ),
-                const Spacer(),
-                if (_variants.length > 1 && !_running)
-                  GestureDetector(
-                    onTap: () => _removeVariant(i),
-                    child: Icon(Icons.delete_outline_rounded, size: 18, color: Colors.red.shade300),
-                  ),
-              ]),
-              const SizedBox(height: 6),
-              _multiline(dark, _variants[i], minLines: 3, mono: false, enabled: !_running),
-            ]),
+        child: const Row(children: [
+          Icon(Iconsax.cloud, size: 20, color: kTealDeep),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Рассылка идёт на сервере: приложение можно закрыть, телефон — выключить. По завершении придёт пуш.',
+              style: TextStyle(fontSize: 12.5, color: kTealDeep, fontWeight: FontWeight.w600),
+            ),
           ),
-        if (!_running)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: _addVariant,
-              icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text('Добавить вариант'),
-              style: TextButton.styleFrom(foregroundColor: AppColors.brand),
+        ]),
+      );
+
+  /// Итог последней рассылки (когда не идёт).
+  Widget _resultBanner(BroadcastDoc b) {
+    final (label, color) = switch (b.status) {
+      'done' => ('Завершена: ${b.sent} ✓${b.failed > 0 ? ' · ${b.failed} ✗' : ''}', const Color(0xFF23A35F)),
+      'stopped' => ('Остановлена: успели ${b.sent} из ${b.total}', kAmberDeep),
+      'error' => ('Ошибка рассылки', const Color(0xFFC6403C)),
+      _ => ('', kSub),
+    };
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(children: [
+        Icon(b.status == 'done' ? Iconsax.tick_circle : Iconsax.info_circle, size: 17, color: color),
+        const SizedBox(width: 7),
+        Text(label, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: color)),
+      ]),
+    );
+  }
+
+  // ── Карточки ────────────────────────────────────────────────────────────
+
+  BoxDecoration get _cardDeco => BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 14, offset: const Offset(0, 4))],
+      );
+
+  Widget _cardTitle(IconData icon, String title, {Widget? trailing}) => Row(children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
+          child: Icon(icon, size: 18, color: kTealDeep),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kInk))),
+        ?trailing,
+      ]);
+
+  Widget _presetChip({required IconData icon, required String label, required Color color, required VoidCallback? onTap}) {
+    return Material(
+      color: color.withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _modeChips() {
+    const items = [(_Mode.rotate, 'По очереди'), (_Mode.random, 'Рандом'), (_Mode.single, 'Один')];
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(color: const Color(0xFFEFF4F2), borderRadius: BorderRadius.circular(14)),
+      child: Row(children: [
+        for (final (m, label) in items)
+          Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _mode = m),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: _mode == m ? Colors.white : Colors.transparent,
+                  borderRadius: BorderRadius.circular(11),
+                  boxShadow: _mode == m
+                      ? [BoxShadow(color: Colors.black.withValues(alpha: 0.07), blurRadius: 8, offset: const Offset(0, 2))]
+                      : null,
+                ),
+                alignment: Alignment.center,
+                child: Text(label,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: _mode == m ? FontWeight.w700 : FontWeight.w500,
+                        color: _mode == m ? kTealDeep : kSub)),
+              ),
             ),
           ),
       ]),
     );
   }
 
-  Widget _card(bool dark, String title, IconData icon, List<Widget> children) => Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-        decoration: BoxDecoration(
-          color: dark ? const Color(0xFF1B242B) : Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.045), blurRadius: 10, offset: const Offset(0, 3))],
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(children: [
-              Container(
-                width: 28, height: 28,
-                decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
-                child: Icon(icon, size: 16, color: AppColors.brand),
-              ),
-              const SizedBox(width: 10),
-              Text(title, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
-            ]),
+  Widget _variantsCard() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: _cardDeco,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _cardTitle(Iconsax.message_text_1, 'Тексты · ${_variants.length}'),
+        const SizedBox(height: 12),
+        Row(children: [
+          _presetChip(
+            icon: Iconsax.notification,
+            label: 'Напоминания',
+            color: kTealDeep,
+            onTap: () => _loadPreset(_defaultVariants, single: false),
           ),
-          ...children,
+          const SizedBox(width: 8),
+          _presetChip(
+            icon: Iconsax.card,
+            label: 'Предоплата',
+            color: const Color(0xFFB07A10),
+            onTap: () => _loadPreset(_paymentVariants, single: false),
+          ),
         ]),
-      );
+        const SizedBox(height: 12),
+        _modeChips(),
+        const SizedBox(height: 8),
+        Text(
+          switch (_mode) {
+            _Mode.single => 'Всем уходит один выбранный вариант (отметьте его ниже).',
+            _Mode.random => 'Каждому — случайный вариант из списка.',
+            _Mode.rotate => 'Каждому — следующий вариант по кругу.',
+          },
+          style: const TextStyle(fontSize: 12, color: kSub),
+        ),
+        const SizedBox(height: 4),
+        const Text('Переменные: {name} — имя, {date} — дата приёма', style: TextStyle(fontSize: 12, color: kSub)),
+        const SizedBox(height: 10),
+        // Переключатель «развернуть/свернуть» — редактирование по требованию.
+        Material(
+          color: const Color(0xFFEFF4F2),
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => setState(() => _variantsExpanded = !_variantsExpanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(children: [
+                Icon(_variantsExpanded ? Iconsax.arrow_up_2 : Iconsax.arrow_down_1, size: 16, color: kTealDeep),
+                const SizedBox(width: 8),
+                Text(
+                  _variantsExpanded ? 'Свернуть варианты' : 'Показать варианты · ${_variants.length}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: kTealDeep),
+                ),
+              ]),
+            ),
+          ),
+        ),
+        if (!_variantsExpanded && _mode == _Mode.single) ...[
+          // В режиме «Один» выбор варианта доступен и в свёрнутом виде.
+          const SizedBox(height: 10),
+          for (var i = 0; i < _variants.length; i++)
+            InkWell(
+              onTap: () => setState(() => _singleIndex = i),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(children: [
+                  Icon(
+                    _singleIndex == i ? Iconsax.tick_circle : Iconsax.record_circle,
+                    size: 18,
+                    color: _singleIndex == i ? kTealDeep : kSub.withValues(alpha: 0.5),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _variants[i].text.trim().isEmpty ? 'Вариант ${i + 1} (пустой)' : _variants[i].text.trim().split('\n').first,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: kSub),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+        ],
+        if (_variantsExpanded) ...[
+          const SizedBox(height: 14),
+          for (var i = 0; i < _variants.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  if (_mode == _Mode.single) ...[
+                    GestureDetector(
+                      onTap: () => setState(() => _singleIndex = i),
+                      child: Icon(
+                        _singleIndex == i ? Iconsax.tick_circle : Iconsax.record_circle,
+                        size: 20,
+                        color: _singleIndex == i ? kTealDeep : kSub.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+                    child: Text('Вариант ${i + 1}',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: kTealDeep)),
+                  ),
+                  const Spacer(),
+                  if (_variants.length > 1)
+                    GestureDetector(
+                      onTap: () => _removeVariant(i),
+                      child: const Icon(Iconsax.trash, size: 18, color: Color(0xFFD9776F)),
+                    ),
+                ]),
+                const SizedBox(height: 7),
+                _multiline(_variants[i], minLines: 3, mono: false),
+              ]),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _addVariant,
+              icon: const Icon(Iconsax.add, size: 18),
+              label: const Text('Добавить вариант'),
+              style: TextButton.styleFrom(foregroundColor: kTealDeep),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
 
-  Widget _multiline(bool dark, TextEditingController c, {required int minLines, required bool mono, required bool enabled, String? hint}) {
+  Widget _contactsCard(int parsedCount) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: _cardDeco,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _cardTitle(
+          Iconsax.profile_2user,
+          'Контакты',
+          trailing: parsedCount > 0
+              ? Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                  decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(9)),
+                  child: Text('$parsedCount',
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: kTealDeep)),
+                )
+              : null,
+        ),
+        const SizedBox(height: 10),
+        const Text('По одному в строке:  Имя;+7XXXXXXXXXX;дата', style: TextStyle(fontSize: 12, color: kSub)),
+        const SizedBox(height: 8),
+        _multiline(_contacts,
+            minLines: 5,
+            mono: true,
+            hint: 'Дархан;+77014004647;22 июля\nАйгуль;+77771234567;23 июля',
+            onChanged: (_) => setState(() {})),
+      ]),
+    );
+  }
+
+  Widget _multiline(TextEditingController c,
+      {required int minLines, required bool mono, String? hint, ValueChanged<String>? onChanged}) {
     return TextField(
       controller: c,
-      enabled: enabled,
       minLines: minLines,
       maxLines: minLines + 6,
-      style: TextStyle(fontSize: 14.5, fontFamily: mono ? 'monospace' : null, height: 1.35),
+      onChanged: onChanged,
+      style: TextStyle(fontSize: 14, fontFamily: mono ? 'monospace' : null, height: 1.35, color: kInk),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(fontFamily: mono ? 'monospace' : null, color: Colors.grey.withValues(alpha: 0.6)),
+        hintStyle: TextStyle(fontSize: 13, fontFamily: mono ? 'monospace' : null, color: kSub.withValues(alpha: 0.6)),
         filled: true,
-        fillColor: dark ? const Color(0xFF232E36) : const Color(0xFFF4F6F8),
+        fillColor: const Color(0xFFF2F6F5),
         contentPadding: const EdgeInsets.all(12),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.brand, width: 1.5)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: kTeal, width: 1.5)),
       ),
     );
   }
 
-  Widget _actionBar(bool dark, int parsedCount, int sent, int failed) {
-    return Row(children: [
-      Expanded(
-        child: SizedBox(
-          height: 50,
-          child: _running
-              ? FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: Colors.red.shade600, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  onPressed: _stopRun,
-                  icon: const Icon(Icons.stop_rounded),
-                  label: Text(_countdown > 0 ? 'Остановить · следующая через $_countdown c' : 'Остановить'),
-                )
-              : FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: AppColors.brand, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  onPressed: _canSend(parsedCount) ? _start : null,
-                  icon: const Icon(Icons.send_rounded),
-                  label: Text('Отправить рассылку ($parsedCount)', style: const TextStyle(fontWeight: FontWeight.w700)),
-                ),
+  Widget _actionButton(BroadcastDoc? b, bool running, int parsedCount) {
+    if (running && b != null) {
+      return SizedBox(
+        height: 54,
+        child: FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFC6403C),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          ),
+          onPressed: () => _stop(b),
+          icon: const Icon(Iconsax.stop, size: 20),
+          label: Text('Остановить · отправлено ${b.sent} из ${b.total}',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
         ),
+      );
+    }
+    final enabled = _canSend(parsedCount);
+    return SizedBox(
+      height: 54,
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: kTeal,
+          disabledBackgroundColor: const Color(0xFFD6E4E0),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        ),
+        onPressed: enabled ? _start : null,
+        icon: _starting
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+            : const Icon(Iconsax.send_1, size: 20),
+        label: Text('Отправить рассылку${parsedCount > 0 ? ' · $parsedCount' : ''}',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
       ),
-      if (_rows.isNotEmpty) ...[
-        const SizedBox(width: 12),
-        Text('✅ $sent  ❌ $failed', style: const TextStyle(fontWeight: FontWeight.w700)),
-      ],
-    ]);
+    );
   }
 
-  Widget _progress(bool dark) {
+  Widget _progress(BroadcastDoc b) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1B242B) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.045), blurRadius: 10, offset: const Offset(0, 3))],
-      ),
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+      decoration: _cardDeco,
       child: Column(
         children: [
-          for (var i = 0; i < _rows.length; i++)
+          for (var i = 0; i < b.rows.length; i++)
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 11),
               decoration: BoxDecoration(
-                border: i < _rows.length - 1
-                    ? Border(bottom: BorderSide(color: (dark ? Colors.white : Colors.black).withValues(alpha: 0.06)))
+                border: i < b.rows.length - 1
+                    ? Border(bottom: BorderSide(color: Colors.black.withValues(alpha: 0.05)))
                     : null,
               ),
               child: Row(children: [
-                _statusIcon(_rows[i].status),
-                const SizedBox(width: 10),
+                _statusIcon(b.rows[i].status),
+                const SizedBox(width: 11),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
-                      Text(_rows[i].name.isEmpty ? '—' : _rows[i].name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
-                      const SizedBox(width: 6),
-                      Flexible(child: Text(_rows[i].phone, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: context.semantic.textSecondary, fontSize: 13))),
+                      Text(b.rows[i].name.isEmpty ? '—' : b.rows[i].name,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5, color: kInk)),
+                      const SizedBox(width: 7),
+                      Flexible(
+                        child: Text(formatPhone(b.rows[i].phone),
+                            maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 12.5)),
+                      ),
                     ]),
-                    if (_rows[i].date.isNotEmpty)
-                      Text(_rows[i].date, style: TextStyle(fontSize: 12, color: context.semantic.textSecondary)),
-                    if (_rows[i].error != null)
-                      Text(_rows[i].error!, style: TextStyle(fontSize: 12, color: Colors.red.shade400)),
+                    if (b.rows[i].date.isNotEmpty)
+                      Text(b.rows[i].date, style: const TextStyle(fontSize: 12, color: kSub)),
+                    if (b.rows[i].error != null)
+                      Text(b.rows[i].error!, style: const TextStyle(fontSize: 12, color: Color(0xFFC6403C))),
                   ]),
                 ),
-                if (_rows[i].variant > 0)
+                if ((b.rows[i].variant ?? 0) > 0)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(color: AppColors.brand.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(7)),
-                    child: Text('в${_rows[i].variant}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.brand)),
+                    decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(7)),
+                    child: Text('в${b.rows[i].variant}',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: kTealDeep)),
                   ),
               ]),
             ),
@@ -517,10 +716,9 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
     );
   }
 
-  Widget _statusIcon(_St s) => switch (s) {
-        _St.sent => const Icon(Icons.check_circle_rounded, color: Color(0xFF2E9E5B), size: 22),
-        _St.failed => Icon(Icons.error_rounded, color: Colors.red.shade400, size: 22),
-        _St.sending => const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.brand)),
-        _St.pending => Icon(Icons.schedule_rounded, color: Colors.grey.shade400, size: 22),
+  Widget _statusIcon(String s) => switch (s) {
+        'sent' => const Icon(Iconsax.tick_circle, color: Color(0xFF2E9E5B), size: 22),
+        'failed' => const Icon(Iconsax.close_circle, color: Color(0xFFC6403C), size: 22),
+        _ => Icon(Iconsax.clock, color: kSub.withValues(alpha: 0.6), size: 21),
       };
 }

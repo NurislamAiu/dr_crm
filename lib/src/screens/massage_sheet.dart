@@ -4,37 +4,38 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../models/lead.dart';
+import '../models/massage.dart';
 import '../state/providers.dart';
 import 'soft_ui.dart';
 
-const _teal = Color(0xFF13B0A0);
-const _tealDark = Color(0xFF0E8F82);
+// Жёлто-янтарная палитра раздела «Массаж».
+const _teal = Color(0xFFE3A008);
+const _tealDark = Color(0xFFB57807);
 
-/// Bottom sheet создания лида (сохранение в Firestore `leads` с автономером).
-class LeadSheet extends ConsumerStatefulWidget {
-  const LeadSheet({super.key, this.prefillName, this.prefillPhone, this.existing});
+/// Bottom sheet записи на массаж (Firestore `massages` с автономером).
+class MassageSheet extends ConsumerStatefulWidget {
+  const MassageSheet({super.key, this.prefillName, this.prefillPhone, this.existing});
   final String? prefillName;
   final String? prefillPhone;
 
-  /// Если задан — режим редактирования существующего лида.
-  final Lead? existing;
+  /// Если задан — режим редактирования существующей записи.
+  final Massage? existing;
 
-  static Future<void> show(BuildContext context, {String? name, String? phone, Lead? existing}) {
+  static Future<void> show(BuildContext context, {String? name, String? phone, Massage? existing}) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => LeadSheet(prefillName: name, prefillPhone: phone, existing: existing),
+      builder: (_) => MassageSheet(prefillName: name, prefillPhone: phone, existing: existing),
     );
   }
 
   @override
-  ConsumerState<LeadSheet> createState() => _LeadSheetState();
+  ConsumerState<MassageSheet> createState() => _MassageSheetState();
 }
 
-class _LeadSheetState extends ConsumerState<LeadSheet> {
+class _MassageSheetState extends ConsumerState<MassageSheet> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _phone = TextEditingController();
@@ -72,17 +73,17 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
 
   static bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
 
-  /// Сколько активных лидов создано сегодня (нумерация каждый день с 1).
+  /// Сколько активных записей создано сегодня (нумерация каждый день с 1).
   int _todayCount() {
-    final all = ref.read(leadsListProvider).value ?? const <Lead>[];
+    final all = ref.read(massagesListProvider).value ?? const <Massage>[];
     final now = DateTime.now();
     return all.where((l) => !l.archived && l.createdAt != null && _sameDay(l.createdAt!, now)).length;
   }
 
-  /// Порядковый номер существующего лида внутри его дня (без архива).
-  int? _dayIndexOf(Lead ex) {
+  /// Порядковый номер существующей записи внутри её дня (без архива).
+  int? _dayIndexOf(Massage ex) {
     if (ex.createdAt == null) return null;
-    final all = ref.read(leadsListProvider).value ?? const <Lead>[];
+    final all = ref.read(massagesListProvider).value ?? const <Massage>[];
     final sameDay = all
         .where((l) => !l.archived && l.createdAt != null && _sameDay(l.createdAt!, ex.createdAt!))
         .toList()
@@ -120,7 +121,7 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
       return;
     }
     setState(() => _saving = true);
-    final lead = Lead(
+    final lead = Massage(
       name: _name.text.trim(),
       phone: _phone.text.trim(),
       appointmentDate: _apptDate,
@@ -129,7 +130,7 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
       currency: _prepay.text.trim().isEmpty ? null : _currency,
     );
     try {
-      final repo = ref.read(leadRepositoryProvider);
+      final repo = ref.read(massageRepositoryProvider);
       if (_editing) {
         await repo.update(widget.existing!.id!, lead);
       } else {
@@ -140,7 +141,7 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
       final n = _nextNumber != null ? ' №$_nextNumber' : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(_editing ? 'Лид$n обновлён' : 'Лид$n сохранён'),
+          content: Text(_editing ? 'Запись$n обновлена' : 'Запись$n сохранена'),
           backgroundColor: _teal,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -181,7 +182,7 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
                     controller: scrollCtrl,
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
                     children: [
-                      _card(dark, 'Приём у врача', Icons.medical_services_rounded, [
+                      _card(dark, 'Сеанс массажа', Icons.spa_rounded, [
                         Row(children: [
                           Expanded(child: _dateTile(dark, 'День', _apptDate, (d) => setState(() => _apptDate = d))),
                           const SizedBox(width: 10),
@@ -233,18 +234,18 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
               boxShadow: [BoxShadow(color: _teal.withValues(alpha: 0.4), blurRadius: 12, offset: const Offset(0, 4))],
             ),
             alignment: Alignment.center,
-            child: const Text('ЛИД', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)),
+            child: const Text('МАС', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)),
           ),
           const SizedBox(width: 13),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_editing ? 'Редактирование лида' : 'Новый лид',
+                Text(_editing ? 'Редактирование записи' : 'Новая запись',
                     style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
                 Text(
                     _nextNumber != null
-                        ? (_editing ? 'Лид №$_nextNumber' : 'Номер присвоится: №$_nextNumber')
+                        ? (_editing ? 'Запись №$_nextNumber' : 'Номер присвоится: №$_nextNumber')
                         : 'Определяем номер…',
                     style: TextStyle(fontSize: 12.5, color: (dark ? Colors.white : Colors.black).withValues(alpha: 0.5))),
               ],
@@ -273,14 +274,14 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
         border: Border.all(color: _teal.withValues(alpha: 0.3)),
       ),
       child: Row(children: [
-        const Icon(Icons.bolt_rounded, size: 17, color: _teal),
+        const Icon(Icons.spa_rounded, size: 17, color: _teal),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
             '$num-$time  $name${phone.isNotEmpty ? '  $phone' : ''}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: dark ? Colors.white : const Color(0xFF0E3B36)),
+            style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: dark ? Colors.white : const Color(0xFF5B3D02)),
           ),
         ),
       ]),
@@ -436,7 +437,7 @@ class _LeadSheetState extends ConsumerState<LeadSheet> {
                 : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     const Icon(Icons.check_rounded, size: 21),
                     const SizedBox(width: 8),
-                    Text(_editing ? 'Сохранить изменения' : 'Сохранить лид', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    Text(_editing ? 'Сохранить изменения' : 'Сохранить запись', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   ]),
           ),
         ),

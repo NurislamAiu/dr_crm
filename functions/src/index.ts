@@ -1,10 +1,12 @@
 import { onRequest, onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import { randomUUID, createHmac } from "crypto";
 import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, wazzupEditText, wazzupDeleteMessage, type WazzupMessage, type WazzupStatus } from "./wazzup";
+import { auditOutbound, logRisk, peekChat } from "./risk";
 
 admin.initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
@@ -81,6 +83,8 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
   const statuses = Array.isArray(body.statuses) ? body.statuses : [];
   const inboundChats = new Set<string>();
   const missedCallChats = new Set<string>();
+  // Пуш-уведомления менеджерам о входящих.
+  const pushItems: { chatId: string; title: string; body: string }[] = [];
 
   try {
     for (const m of messages) {
@@ -94,6 +98,10 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
       if (inbound && type === "missing_call") missedCallChats.add(chatId);
       const text = m.text ?? null;
       const preview = text && text.length > 0 ? text : `[${type}]`;
+      if (inbound && type !== "missing_call") {
+        const kindLabel: Record<string, string> = { image: "📷 Фото", audio: "🎤 Голосовое", video: "🎬 Видео", document: "📄 Файл" };
+        pushItems.push({ chatId, title: `CRM · ${fmtPhone(chatId)}`, body: (text && text.length > 0 ? text : (kindLabel[type] ?? `[${type}]`)).slice(0, 140) });
+      }
       const ms = parseDateMs(m.dateTime);
       const createdAt = ms ? admin.firestore.Timestamp.fromMillis(ms) : ts();
 
@@ -118,37 +126,92 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
         lastMessagePreview: preview,
         updatedAt: ts(),
       };
-      if (inbound) conv.unreadCount = admin.firestore.FieldValue.increment(1);
+      conv.lastOutbound = !inbound;
+      conv.lastAuthorId = null;
+      // Имя автора из Wazzup (менеджер ответил из интерфейса Wazzup/WhatsApp).
+      conv.lastAuthorName = inbound ? null : (m.authorName ?? null);
+      if (inbound) {
+        conv.unreadCount = admin.firestore.FieldValue.increment(1);
+        // Клиент нам писал — значит контакт «тёплый» (контроль подозрительной
+        // активности не считает такие чаты холодной рассылкой).
+        conv.hasInbound = true;
+      }
       batch.set(firestore.collection("conversations").doc(chatId), conv, { merge: true });
 
-      // Сообщение (ключ = messageId → идемпотентно).
-      batch.set(
-        firestore.collection("messages").doc(String(m.messageId)),
-        {
-          conversationId: chatId,
-          chatId,
-          externalMessageId: m.messageId,
-          direction: inbound ? "inbound" : "outbound",
-          type,
-          text,
-          contentUri: m.contentUri ?? null,
-          status: inbound ? "received" : (m.status ?? "sent"),
-          authorName: m.authorName ?? null,
-          createdAt,
-        },
-        { merge: true },
-      );
+      // Эхо нашего исходящего приходит с ДРУГИМ messageId — иначе в чате
+      // появляется дубль. Ищем уже записанное нами сообщение (у него есть
+      // crmMessageId) с тем же текстом за последние 5 минут и обновляем его.
+      let twinRef: FirebaseFirestore.DocumentReference | null = null;
+      if (!inbound && text && text.length > 0) {
+        const nowMs = ms ?? Date.now();
+        const recent = await firestore
+          .collection("messages")
+          .where("conversationId", "==", chatId)
+          .orderBy("createdAt", "desc")
+          .limit(15)
+          .get();
+        for (const d of recent.docs) {
+          if (d.id === String(m.messageId)) { twinRef = null; break; }
+          const x = d.data();
+          if (x.direction !== "outbound" || !x.crmMessageId) continue;
+          if ((x.text ?? "") !== text) continue;
+          const tms = (x.createdAt as admin.firestore.Timestamp | undefined)?.toMillis() ?? 0;
+          if (Math.abs(tms - nowMs) > 5 * 60000) continue;
+          twinRef = d.ref;
+          break;
+        }
+      }
+
+      if (twinRef) {
+        // Это эхо уже сохранённого сообщения — только дополняем.
+        batch.set(
+          twinRef,
+          { externalMessageId: m.messageId, status: m.status ?? "sent", echoMessageId: m.messageId },
+          { merge: true },
+        );
+      } else {
+        // Сообщение (ключ = messageId → идемпотентно).
+        batch.set(
+          firestore.collection("messages").doc(String(m.messageId)),
+          {
+            conversationId: chatId,
+            chatId,
+            externalMessageId: m.messageId,
+            direction: inbound ? "inbound" : "outbound",
+            type,
+            text,
+            contentUri: m.contentUri ?? null,
+            status: inbound ? "received" : (m.status ?? "sent"),
+            authorName: m.authorName ?? null,
+            createdAt,
+          },
+          { merge: true },
+        );
+      }
 
       await batch.commit();
     }
 
-    // Статусы доставки/прочтения — обновляем сообщение по messageId.
+    // Статусы доставки/прочтения. ВАЖНО: set() создавал бы пустой документ,
+    // если сообщения с таким id нет (у нашего исходящего id другой) — а он
+    // потом висел бы в чате пустым «сообщением». Поэтому обновляем только
+    // существующие, иначе ищем по externalMessageId.
     for (const s of statuses) {
       if (!s.messageId || !s.status) continue;
-      await firestore
+      const ref = firestore.collection("messages").doc(String(s.messageId));
+      const snap = await ref.get();
+      if (snap.exists) {
+        await ref.set({ status: s.status, statusAt: ts() }, { merge: true });
+        continue;
+      }
+      const found = await firestore
         .collection("messages")
-        .doc(String(s.messageId))
-        .set({ status: s.status, statusAt: ts() }, { merge: true });
+        .where("externalMessageId", "==", String(s.messageId))
+        .limit(1)
+        .get();
+      if (!found.empty) {
+        await found.docs[0]!.ref.set({ status: s.status, statusAt: ts() }, { merge: true });
+      }
     }
 
     // Автоответчик (best-effort, не ломает приём при ошибке).
@@ -168,12 +231,106 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
       }
     }
 
+    // Пуши менеджерам (best-effort).
+    for (const cid of missedCallChats) {
+      pushItems.push({ chatId: cid, title: "CRM · 📵 Пропущенный звонок", body: fmtPhone(cid) });
+    }
+    try {
+      await pushToOfflineManagers(pushItems);
+    } catch (e) {
+      console.error("push error", e);
+    }
+
     res.json({ ok: true, messages: messages.length, statuses: statuses.length });
   } catch (e) {
     console.error("wazzupWebhook error", e);
     res.status(500).json({ error: "internal" });
   }
 });
+
+/** «77473193061» → «+7 747 319-30-61» (для заголовков пушей). */
+function fmtPhone(chatId: string): string {
+  const d = chatId.replace(/\D/g, "");
+  if (d.length === 11 && (d.startsWith("7") || d.startsWith("8"))) {
+    const n = d.startsWith("8") ? `7${d.slice(1)}` : d;
+    return `+7 ${n.slice(1, 4)} ${n.slice(4, 7)}-${n.slice(7, 9)}-${n.slice(9)}`;
+  }
+  return `+${d}`;
+}
+
+/**
+ * Пуш-уведомления менеджерам, которые сейчас НЕ в приложении (presence).
+ * Токены — fcmTokens/{uid}.tokens (array). Мёртвые токены вычищаются.
+ */
+async function pushToOfflineManagers(rawItems: { chatId: string; title: string; body: string }[]): Promise<void> {
+  if (rawItems.length === 0) return;
+  const firestore = db();
+
+  // Заблокированные контакты — без пушей.
+  const chatIds = [...new Set(rawItems.map((i) => i.chatId))];
+  const convDocs = await Promise.all(chatIds.map((id) => firestore.doc(`conversations/${id}`).get()));
+  const blockedIds = new Set(convDocs.filter((d) => d.data()?.blocked === true).map((d) => d.id));
+  const items = rawItems.filter((i) => !blockedIds.has(i.chatId));
+  if (items.length === 0) return;
+
+  // Кто сейчас онлайн — им пуш не нужен (они видят чат).
+  const presence = await firestore.collection("presence").where("online", "==", true).get();
+  const now = Date.now();
+  const onlineUids = new Set(
+    presence.docs
+      .filter((d) => {
+        const ls = (d.data().lastSeen as admin.firestore.Timestamp | undefined)?.toMillis() ?? 0;
+        return now - ls < 120000;
+      })
+      .map((d) => d.id),
+  );
+
+  const tokensSnap = await firestore.collection("fcmTokens").get();
+  const tokens: string[] = [];
+  const ownerOf: Record<string, string> = {};
+  for (const d of tokensSnap.docs) {
+    if (onlineUids.has(d.id)) continue;
+    if (d.data().enabled === false) continue; // менеджер отключил уведомления
+    const list = (d.data().tokens ?? []) as unknown[];
+    for (const t of list) {
+      if (typeof t === "string" && t.length > 0) {
+        tokens.push(t);
+        ownerOf[t] = d.id;
+      }
+    }
+  }
+  console.log(`push: items=${items.length} onlineUids=${JSON.stringify([...onlineUids])} tokenDocs=${tokensSnap.size} tokens=${tokens.length}`);
+  if (tokens.length === 0) return;
+
+  for (const it of items) {
+    const resp = await admin.messaging().sendEachForMulticast({
+      tokens,
+      notification: { title: it.title, body: it.body },
+      data: { chatId: it.chatId, name: it.title, phone: it.chatId },
+      apns: { payload: { aps: { sound: "default", badge: 1 } } },
+      android: { priority: "high", notification: { sound: "default" } },
+    });
+    console.log(`push "${it.title}": ok=${resp.successCount} fail=${resp.failureCount} errors=${JSON.stringify(resp.responses.filter((r) => !r.success).map((r) => r.error?.code))}`);
+    // Чистим невалидные токены (переустановка приложения и т.п.).
+    const dead: Record<string, string[]> = {};
+    resp.responses.forEach((r, i) => {
+      const code = r.error?.code ?? "";
+      const t = tokens[i];
+      if (!t || r.success) return;
+      if (code.includes("registration-token-not-registered") || code.includes("invalid-registration-token") || code.includes("invalid-argument")) {
+        const uid = ownerOf[t];
+        if (uid) (dead[uid] ??= []).push(t);
+      }
+    });
+    for (const [uid, list] of Object.entries(dead)) {
+      await firestore
+        .collection("fcmTokens")
+        .doc(uid)
+        .set({ tokens: admin.firestore.FieldValue.arrayRemove(...list) }, { merge: true })
+        .catch(() => {});
+    }
+  }
+}
 
 /**
  * Автоответ на входящее (config/autoReply): текст, только вне рабочих часов
@@ -195,6 +352,7 @@ async function maybeAutoReply(chatId: string, apiKey: string, channelId: string)
 
   const convRef = firestore.doc(`conversations/${chatId}`);
   const conv = (await convRef.get()).data();
+  if (conv?.blocked === true) return; // заблокирован — не автоотвечаем
   const cooldownMin = typeof cfg.cooldownMin === "number" ? cfg.cooldownMin : 360;
   const last = (conv?.lastAutoReplyAt as admin.firestore.Timestamp | undefined)?.toDate();
   if (last && Date.now() - last.getTime() < cooldownMin * 60000) return;
@@ -220,7 +378,10 @@ async function maybeAutoReply(chatId: string, apiKey: string, channelId: string)
     { merge: true },
   );
   await convRef.set(
-    { lastAutoReplyAt: ts(), lastMessageAt: ts(), lastMessagePreview: (cfg.text as string).slice(0, 120) },
+    {
+      lastAutoReplyAt: ts(), lastMessageAt: ts(), lastMessagePreview: (cfg.text as string).slice(0, 120),
+      lastOutbound: true, lastAuthorId: "auto", lastAuthorName: null,
+    },
     { merge: true },
   );
 }
@@ -233,6 +394,7 @@ async function maybeMissedCallReply(chatId: string, apiKey: string, channelId: s
 
   const convRef = firestore.doc(`conversations/${chatId}`);
   const conv = (await convRef.get()).data();
+  if (conv?.blocked === true) return; // заблокирован — не автоотвечаем
   const last = (conv?.lastMissedReplyAt as admin.firestore.Timestamp | undefined)?.toDate();
   if (last && Date.now() - last.getTime() < 60 * 60000) return;
 
@@ -350,25 +512,33 @@ export const updateManager = onCall(async (request) => {
  * Отправка сообщения менеджером (callable, Фаза 2). Требует Firebase Auth.
  * Пишет сообщение в Firestore и отправляет через Wazzup.
  */
-export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
-  const data = (request.data ?? {}) as { phone?: string; text?: string; name?: string; refMessageId?: string; replyToText?: string };
-  const chatId = normalizeChatId("whatsapp", String(data.phone ?? ""));
-  const text = (data.text ?? "").trim();
-  if (!chatId || !text) throw new HttpsError("invalid-argument", "phone и text обязательны");
-  const refMessageId = (data.refMessageId ?? "").trim() || undefined;
+/**
+ * Общая отправка текста: Wazzup + записи в messages/contacts/conversations.
+ * Используется callable sendMessage и серверной рассылкой.
+ */
+async function sendOutboundText(
+  apiKey: string,
+  channelId: string,
+  p: { phone: string; text: string; name?: string; authorId: string; refMessageId?: string; replyToText?: string; isBroadcast?: boolean },
+): Promise<string> {
+  const chatId = normalizeChatId("whatsapp", p.phone);
+  const text = p.text.trim();
+  if (!chatId || !text) throw new Error("phone и text обязательны");
+
+  // Состояние диалога ДО записи (для проверки «холодный контакт»).
+  const pre = p.isBroadcast ? null : await peekChat(chatId);
 
   const crmMessageId = randomUUID();
-  const result = await wazzupSendText(WAZZUP_API_KEY.value(), {
-    channelId: WAZZUP_CHANNEL_ID.value(),
+  const result = await wazzupSendText(apiKey, {
+    channelId,
     chatId,
     chatType: "whatsapp",
     text,
     crmMessageId,
-    refMessageId,
+    refMessageId: p.refMessageId,
   });
   const messageId = String(result.messageId ?? crmMessageId);
-  const name = (data.name ?? "").trim() || `+${chatId}`;
+  const name = (p.name ?? "").trim() || `+${chatId}`;
   const firestore = db();
 
   await firestore.collection("messages").doc(messageId).set(
@@ -380,9 +550,10 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
       type: "text",
       text,
       status: "sent",
-      authorId: request.auth.uid,
+      authorId: p.authorId,
       crmMessageId,
-      ...(refMessageId ? { replyToId: refMessageId, replyToText: (data.replyToText ?? "").slice(0, 200) } : {}),
+      ...(p.isBroadcast ? { isBroadcast: true } : {}),
+      ...(p.refMessageId ? { replyToId: p.refMessageId, replyToText: (p.replyToText ?? "").slice(0, 200) } : {}),
       createdAt: ts(),
     },
     { merge: true },
@@ -392,12 +563,193 @@ export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID]
     { merge: true },
   );
   await firestore.collection("conversations").doc(chatId).set(
-    { contactId: chatId, phone: chatId, name, chatType: "whatsapp", status: "open", unreadCount: 0, lastMessageAt: ts(), lastMessagePreview: text, updatedAt: ts() },
+    {
+      contactId: chatId, phone: chatId, name, chatType: "whatsapp", status: "open", unreadCount: 0,
+      lastMessageAt: ts(), lastMessagePreview: text,
+      // Кто ответил последним — показываем в списке чатов.
+      lastOutbound: true, lastAuthorId: p.authorId, lastAuthorName: null,
+      updatedAt: ts(),
+    },
     { merge: true },
   );
 
-  return { ok: true, messageId };
+  // Контроль подозрительной активности (не ломает отправку при ошибке).
+  if (pre) {
+    await auditOutbound({ authorId: p.authorId, chatId, text, messageId, cold: pre.cold });
+  }
+  return messageId;
+}
+
+export const sendMessage = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
+  const data = (request.data ?? {}) as { phone?: string; text?: string; name?: string; refMessageId?: string; replyToText?: string };
+  try {
+    const messageId = await sendOutboundText(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value(), {
+      phone: String(data.phone ?? ""),
+      text: data.text ?? "",
+      name: data.name,
+      authorId: request.auth.uid,
+      refMessageId: (data.refMessageId ?? "").trim() || undefined,
+      replyToText: data.replyToText,
+    });
+    return { ok: true, messageId };
+  } catch (e) {
+    throw new HttpsError("invalid-argument", String(e instanceof Error ? e.message : e));
+  }
 });
+
+/**
+ * Состояние WhatsApp-канала в Wazzup (active / qridle / disabled и т.п.).
+ * Нужно, чтобы менеджеры сразу видели, что номер отвалился и сообщения
+ * не уходят.
+ */
+export const channelStatus = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Требуется вход");
+  try {
+    const res = await fetch("https://api.wazzup24.com/v3/channels", {
+      headers: { Authorization: `Bearer ${WAZZUP_API_KEY.value()}` },
+    });
+    if (!res.ok) return { ok: false, state: "unknown", error: `HTTP ${res.status}` };
+    const body = (await res.json()) as unknown;
+    const list = (Array.isArray(body) ? body : ((body as { data?: unknown[] }).data ?? [])) as Record<string, unknown>[];
+    const want = WAZZUP_CHANNEL_ID.value();
+    const ch = list.find((c) => c.channelId === want) ?? list[0];
+    if (!ch) return { ok: false, state: "unknown", error: "Канал не найден" };
+    return {
+      ok: true,
+      state: String(ch.state ?? "unknown"),
+      phone: String(ch.plainId ?? ch.name ?? ""),
+      transport: String(ch.transport ?? ""),
+    };
+  } catch (e) {
+    return { ok: false, state: "unknown", error: String(e instanceof Error ? e.message : e) };
+  }
+});
+
+// ── Серверная рассылка ────────────────────────────────────────────────────
+
+type BroadcastRow = { name: string; phone: string; date: string; status: string; variant?: number; error?: string };
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Пуш создателю рассылки о завершении (независимо от presence). */
+async function pushBroadcastDone(createdBy: string, sent: number, failed: number): Promise<void> {
+  try {
+    const doc = await db().collection("fcmTokens").doc(createdBy).get();
+    const d = doc.data();
+    if (!d || d.enabled === false) return;
+    const tokens = ((d.tokens ?? []) as unknown[]).filter((t): t is string => typeof t === "string");
+    if (!tokens.length) return;
+    await admin.messaging().sendEachForMulticast({
+      tokens,
+      notification: { title: "CRM · Рассылка завершена", body: `Отправлено: ${sent} ✓${failed > 0 ? ` · ошибок: ${failed}` : ""}` },
+      apns: { payload: { aps: { sound: "default" } } },
+      android: { priority: "high" },
+    });
+  } catch (e) {
+    console.error("pushBroadcastDone error", e);
+  }
+}
+
+/**
+ * Обработчик рассылок: раз в минуту берёт активную (status=running) и шлёт
+ * до 3 сообщений с паузой delaySec между ними. Паузы не сжимаются, дубли
+ * исключены (каждая строка помечается sent/failed до перехода к следующей).
+ * maxInstances 1 — единственный обработчик, гонок нет.
+ */
+export const processBroadcasts = onSchedule(
+  { schedule: "every 1 minutes", secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID], timeoutSeconds: 120, maxInstances: 1 },
+  async () => {
+    const firestore = db();
+    const snap = await firestore.collection("broadcasts").where("status", "==", "running").limit(1).get();
+    if (snap.empty) return;
+    const first = snap.docs[0];
+    if (!first) return;
+    const ref = first.ref;
+    const startedAt = Date.now();
+
+    for (let k = 0; k < 3; k++) {
+      const fresh = await ref.get();
+      const b = fresh.data();
+      if (!b || b.status !== "running") return;
+
+      const rows = (b.rows ?? []) as BroadcastRow[];
+
+      // Журнал: кто запустил рассылку, на скольких и с какой паузой.
+      if (b.riskLogged !== true) {
+        const delaySec = typeof b.delaySec === "number" ? b.delaySec : 20;
+        const firstText = ((b.variants ?? []) as unknown[]).find((v): v is string => typeof v === "string") ?? "";
+        await logRisk({
+          authorId: String(b.createdBy ?? ""),
+          kinds: rows.length > 30 || delaySec < 15 ? ["blast", "burst"] : ["blast"],
+          text: firstText,
+          count: rows.length,
+          docId: `blast_${ref.id}`,
+        }).catch(() => {});
+        await ref.update({ riskLogged: true });
+      }
+
+      const idx = rows.findIndex((r) => r.status === "pending");
+      if (idx < 0) {
+        const sent = rows.filter((r) => r.status === "sent").length;
+        const failed = rows.filter((r) => r.status === "failed").length;
+        await ref.update({ status: "done", finishedAt: ts(), updatedAt: ts() });
+        await pushBroadcastDone(String(b.createdBy ?? ""), sent, failed);
+        return;
+      }
+
+      // Выдерживаем паузу от предыдущей отправки (никогда не короче delaySec).
+      const delayMs = (typeof b.delaySec === "number" ? b.delaySec : 20) * 1000;
+      const lastMs = (b.lastSentAt as admin.firestore.Timestamp | undefined)?.toMillis() ?? 0;
+      const waitMs = lastMs + delayMs - Date.now();
+      if (waitMs > 0) {
+        // Если ожидание не влезает в этот запуск — доотправит следующий (через минуту).
+        if (Date.now() - startedAt + waitMs > 90_000) return;
+        await sleep(waitMs);
+      }
+
+      const variants = ((b.variants ?? []) as unknown[]).filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+      if (!variants.length) {
+        await ref.update({ status: "error", error: "Нет текстов", updatedAt: ts() });
+        return;
+      }
+      const mode = String(b.mode ?? "rotate");
+      const done = rows.filter((r) => r.status !== "pending").length;
+      const vIdx = mode === "single"
+        ? Math.min(typeof b.singleIndex === "number" ? b.singleIndex : 0, variants.length - 1)
+        : mode === "random"
+          ? Math.floor(Math.random() * variants.length)
+          : done % variants.length;
+
+      const row = rows[idx];
+      const tpl = variants[vIdx] ?? variants[0] ?? "";
+      if (!row) return;
+      const text = tpl.replaceAll("{name}", row.name).replaceAll("{date}", row.date);
+      try {
+        await sendOutboundText(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value(), {
+          phone: row.phone,
+          text,
+          name: row.name,
+          authorId: String(b.createdBy ?? "broadcast"),
+          isBroadcast: true,
+        });
+        rows[idx] = { ...row, status: "sent", variant: vIdx + 1 };
+      } catch (e) {
+        rows[idx] = { ...row, status: "failed", variant: vIdx + 1, error: String(e instanceof Error ? e.message : e).slice(0, 200) };
+      }
+      const sent = rows.filter((r) => r.status === "sent").length;
+      const failed = rows.filter((r) => r.status === "failed").length;
+      await ref.update({ rows, sent, failed, lastSentAt: ts(), updatedAt: ts() });
+
+      if (!rows.some((r) => r.status === "pending")) {
+        await ref.update({ status: "done", finishedAt: ts(), updatedAt: ts() });
+        await pushBroadcastDone(String(b.createdBy ?? ""), sent, failed);
+        return;
+      }
+      if (Date.now() - startedAt > 80_000) return;
+    }
+  },
+);
 
 /**
  * Отправка медиа менеджером (callable). Файл уже загружен приложением в
@@ -418,6 +770,7 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
   const tok = mediaToken(mediaPath, WAZZUP_WEBHOOK_SECRET.value());
   const contentUri = `${REGION_HOST}/mediaContent?path=${mediaPath}&t=${tok}`;
 
+  const pre = await peekChat(chatId);
   const crmMessageId = randomUUID();
   const result = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
     channelId: WAZZUP_CHANNEL_ID.value(),
@@ -451,9 +804,21 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
     { merge: true },
   );
   await firestore.collection("conversations").doc(chatId).set(
-    { contactId: chatId, phone: chatId, name, chatType: "whatsapp", status: "open", unreadCount: 0, lastMessageAt: ts(), lastMessagePreview: `[${type}]`, updatedAt: ts() },
+    {
+      contactId: chatId, phone: chatId, name, chatType: "whatsapp", status: "open", unreadCount: 0,
+      lastMessageAt: ts(), lastMessagePreview: `[${type}]`,
+      lastOutbound: true, lastAuthorId: request.auth.uid, lastAuthorName: null,
+      updatedAt: ts(),
+    },
     { merge: true },
   );
+  await auditOutbound({
+    authorId: request.auth.uid,
+    chatId,
+    text: `[${type}]`,
+    messageId,
+    cold: pre.cold,
+  });
   return { ok: true, messageId };
 });
 
@@ -475,11 +840,21 @@ export const deleteMessage = onCall({ secrets: [WAZZUP_API_KEY] }, async (reques
   const data = (request.data ?? {}) as { messageId?: string };
   const messageId = (data.messageId ?? "").trim();
   if (!messageId) throw new HttpsError("invalid-argument", "messageId обязателен");
+  // Текст читаем ДО удаления — иначе в журнале останется пустое событие.
+  const before = (await db().collection("messages").doc(messageId).get()).data();
   await wazzupDeleteMessage(WAZZUP_API_KEY.value(), messageId);
   await db().collection("messages").doc(messageId).set(
     { isDeleted: true, text: null, mediaUrl: null, contentUri: null, updatedAt: ts() },
     { merge: true },
   );
+  await logRisk({
+    authorId: request.auth.uid,
+    kinds: ["deleted"],
+    chatId: String(before?.conversationId ?? ""),
+    text: String(before?.text ?? "[медиа]"),
+    messageId,
+    docId: `del_${messageId}`,
+  }).catch(() => {});
   return { ok: true };
 });
 

@@ -12,101 +12,492 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:just_audio/just_audio.dart';
 
+import 'package:iconsax/iconsax.dart';
+
 import '../data/firestore_chat_repository.dart';
+import '../data/channel_status_service.dart';
 import '../data/presence_service.dart';
 import '../data/quick_replies_service.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'lead_sheet.dart';
+import 'massage_sheet.dart';
+import 'soft_ui.dart';
 import 'vip_client_sheet.dart';
 
-/// Список чатов из Firestore (firebase-режим миграции).
-class FirebaseConversationsScreen extends ConsumerWidget {
+const _chatsPageBg = Color(0xFFF1F8F6);
+
+/// Список чатов — «мягкий» стиль: тил-шапка со скруглением, белый лист,
+/// карточки с флаг-аватарами. VIP-чаты получают аватар assets/vip.png,
+/// лиды — бейдж-молнию на флаге.
+class FirebaseConversationsScreen extends ConsumerStatefulWidget {
   const FirebaseConversationsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: dark ? const [Color(0xFF0E1519), Color(0xFF0B1013)] : const [Color(0xFFF4F7F8), Color(0xFFEDF2F2)],
-          ),
+  ConsumerState<FirebaseConversationsScreen> createState() => _FirebaseConversationsScreenState();
+}
+
+/// Фильтр списка чатов.
+enum _ChatFilter { all, unread, lead, massage, vip }
+
+class _FirebaseConversationsScreenState extends ConsumerState<FirebaseConversationsScreen> {
+  final _search = TextEditingController();
+  String _query = '';
+  _ChatFilter _filter = _ChatFilter.all;
+
+  @override
+  void initState() {
+    super.initState();
+    // Один раз проверяем наличие vip.png: иначе каждый VIP-тайл при скролле
+    // безуспешно грузит ассет заново (джанк из-за асинхронных исключений).
+    if (vipAssetExists == null) {
+      rootBundle.load('assets/vip.png').then((_) {
+        vipAssetExists = true;
+        if (mounted) setState(() {});
+      }).catchError((_) {
+        vipAssetExists = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vipPhones = ref.watch(vipPhonesProvider);
+    final leadPhones = ref.watch(leadPhonesProvider);
+    final massagePhones = ref.watch(massagePhonesProvider);
+    final leadsToday = ref.watch(leadsTodayCountProvider);
+
+    // Статистика дня — в шапке (стеклянные карточки на тил-фоне).
+    final items = ref.watch(firebaseConversationsProvider).value ?? const <FsConversation>[];
+    final todayChats = items.where((c) => _isToday(c.lastMessageAt)).toList();
+    final answered = todayChats.where((c) => c.unreadCount == 0).length;
+
+    final conv = ref.watch(firebaseConversationsProvider);
+    // Состояние WhatsApp-канала (Wazzup): предупреждаем, если номер отвалился.
+    final channel = ref.watch(channelStatusProvider).value;
+
+    // Шапка как в WhatsApp: прячется при скролле вниз, возвращается при
+    // скролле вверх (floating + snap).
+    final header = SliverAppBar(
+      automaticallyImplyLeading: false,
+      primary: false,
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      toolbarHeight: 0,
+      floating: true,
+      snap: true,
+      expandedHeight: MediaQuery.of(context).padding.top + 292,
+      flexibleSpace: FlexibleSpaceBar(
+        collapseMode: CollapseMode.pin,
+        background: SoftHeader(
+          color: kTeal,
+          colorDeep: kTealDeep,
+          title: 'Чаты',
+          dateLabel: weekdayDateRu(DateTime.now()),
+          actions: const [_FbOnlineBadge()],
+          strip: Column(children: [
+            _searchBar(),
+            const SizedBox(height: 12),
+            Row(children: [
+              HeaderStat(value: '$leadsToday', label: 'лидов сегодня'),
+              const SizedBox(width: 9),
+              HeaderStat(
+                value: todayChats.isEmpty ? '—' : '$answered/${todayChats.length}',
+                label: 'отвечено чатов',
+              ),
+            ]),
+            const SizedBox(height: 12),
+            _filterChips(items, vipPhones, leadPhones, massagePhones),
+          ]),
         ),
-        child: SafeArea(
-          bottom: false,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-                child: Row(children: [
-                  const Text('Чаты', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
-                  const SizedBox(width: 8),
-                  const _FbBadge(),
-                  const Spacer(),
-                  const _FbOnlineBadge(),
+      ),
+    );
+
+    return Scaffold(
+      backgroundColor: _chatsPageBg,
+      body: CustomScrollView(
+        physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+        slivers: [
+          header,
+          ...conv.when(
+            loading: () => [const SliverFillRemaining(hasScrollBody: false, child: Center(child: CircularProgressIndicator()))],
+            error: (e, _) => [SliverFillRemaining(hasScrollBody: false, child: _msg(Iconsax.cloud_cross, 'Ошибка', '$e'))],
+            data: (items) {
+              // Поиск: по имени, номеру (цифрам) и тексту последнего сообщения.
+              final q = _query.trim().toLowerCase();
+              final qDigits = q.replaceAll(RegExp(r'\D'), '');
+              // Заблокированные скрыты из списка, но находятся поиском.
+              var filtered = q.isEmpty
+                  ? items.where((c) => !c.blocked).toList()
+                  : items.where((c) {
+                      final digits = (c.phone ?? c.id).replaceAll(RegExp(r'\D'), '');
+                      return c.name.toLowerCase().contains(q) ||
+                          (qDigits.isNotEmpty && digits.contains(qDigits)) ||
+                          (c.preview ?? '').toLowerCase().contains(q);
+                    }).toList();
+              // Вкладка-фильтр: непрочитанные / лиды / массаж / VIP.
+              filtered = filtered.where((c) => _matches(c, vipPhones, leadPhones, massagePhones)).toList();
+              if (filtered.isEmpty) {
+                return [
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: q.isNotEmpty
+                        ? _msg(Iconsax.search_normal, 'Ничего не найдено', 'Попробуйте другое имя или номер')
+                        : _filter != _ChatFilter.all
+                            ? _msg(Iconsax.filter, 'Здесь пусто', 'В этой вкладке сейчас нет чатов')
+                            : _msg(Iconsax.message, 'Пока нет чатов', 'Входящие появятся здесь'),
+                  ),
+                ];
+              }
+              return [
+                if (channel != null && !channel.isActive && !channel.isUnknown)
+                  SliverToBoxAdapter(child: _channelBanner(channel)),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(15, 14, 15, 24),
+                  sliver: SliverList.builder(
+                    itemCount: filtered.length,
+                    itemBuilder: (context, i) {
+                      final c = filtered[i];
+                      final digits = (c.phone ?? c.id).replaceAll(RegExp(r'\D'), '');
+                      return _tile(context, c,
+                          isVip: vipPhones.contains(digits),
+                          isLead: leadPhones.contains(digits),
+                          isMassage: massagePhones.contains(digits));
+                    },
+                  ),
+                ),
+              ];
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Подходит ли чат под выбранную вкладку.
+  bool _matches(FsConversation c, Set<String> vip, Set<String> lead, Set<String> mass) {
+    final digits = (c.phone ?? c.id).replaceAll(RegExp(r'\D'), '');
+    return switch (_filter) {
+      _ChatFilter.all => true,
+      _ChatFilter.unread => c.unreadCount > 0 || c.manualUnread,
+      _ChatFilter.lead => lead.contains(digits),
+      _ChatFilter.massage => mass.contains(digits),
+      _ChatFilter.vip => vip.contains(digits),
+    };
+  }
+
+  /// Сколько чатов попадает во вкладку (для счётчика).
+  int _countFor(_ChatFilter f, List<FsConversation> items, Set<String> vip, Set<String> lead, Set<String> mass) {
+    final old = _filter;
+    _filter = f;
+    final n = items.where((c) => !c.blocked && _matches(c, vip, lead, mass)).length;
+    _filter = old;
+    return n;
+  }
+
+  /// Вкладки-фильтры со счётчиками (в шапке, горизонтальный скролл).
+  Widget _filterChips(List<FsConversation> items, Set<String> vip, Set<String> lead, Set<String> mass) {
+    const tabs = <(_ChatFilter, String)>[
+      (_ChatFilter.all, 'Все'),
+      (_ChatFilter.unread, 'Непрочитанные'),
+      (_ChatFilter.lead, 'Лиды'),
+      (_ChatFilter.massage, 'Массаж'),
+      (_ChatFilter.vip, 'VIP'),
+    ];
+    return SizedBox(
+      height: 34,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        itemCount: tabs.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 7),
+        itemBuilder: (context, i) {
+          final (f, label) = tabs[i];
+          final sel = _filter == f;
+          final n = _countFor(f, items, vip, lead, mass);
+          return Material(
+            color: sel ? Colors.white : Colors.white.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => setState(() => _filter = f),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(label,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: sel ? FontWeight.w800 : FontWeight.w600,
+                          color: sel ? kTealDeep : Colors.white)),
+                  if (n > 0) ...[
+                    const SizedBox(width: 5),
+                    Text('$n',
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: sel ? kTealDeep.withValues(alpha: 0.6) : Colors.white.withValues(alpha: 0.7))),
+                  ],
                 ]),
               ),
-              Expanded(
-                child: ref.watch(firebaseConversationsProvider).when(
-                      loading: () => const Center(child: CircularProgressIndicator()),
-                      error: (e, _) => _msg(Icons.cloud_off, 'Ошибка', '$e'),
-                      data: (items) {
-                        if (items.isEmpty) return _msg(Icons.forum_outlined, 'Пока нет чатов', 'Входящие появятся здесь');
-                        return ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
-                          itemCount: items.length,
-                          itemBuilder: (context, i) => _tile(context, items[i], dark),
-                        );
-                      },
-                    ),
-              ),
-            ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Меню по долгому нажатию на чат (как в WhatsApp).
+  Future<void> _chatActions(FsConversation c, bool unread) async {
+    final repo = ref.read(firestoreChatRepositoryProvider);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 10),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(3))),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(displayName(c.name),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: kInk)),
+            ),
           ),
+          ListTile(
+            leading: const Icon(Iconsax.copy, color: kTealDeep),
+            title: const Text('Скопировать номер', style: TextStyle(fontWeight: FontWeight.w600)),
+            onTap: () => Navigator.pop(sheet, 'copy'),
+          ),
+          ListTile(
+            leading: Icon(unread ? Iconsax.tick_circle : Iconsax.message_notif, color: kTealDeep),
+            title: Text(unread ? 'Отметить прочитанным' : 'Отметить непрочитанным',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            onTap: () => Navigator.pop(sheet, unread ? 'read' : 'unread'),
+          ),
+          ListTile(
+            leading: Icon(c.blocked ? Icons.lock_open_rounded : Icons.block_rounded,
+                color: c.blocked ? kTealDeep : const Color(0xFFC6403C)),
+            title: Text(c.blocked ? 'Разблокировать' : 'Заблокировать',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            onTap: () => Navigator.pop(sheet, 'block'),
+          ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (action == null) return;
+    try {
+      switch (action) {
+        case 'copy':
+          if (mounted) await copyPhone(context, c.phone ?? c.id);
+        case 'unread':
+          await repo.markUnread(c.id);
+        case 'read':
+          await repo.markRead(c.id);
+        case 'block':
+          await repo.setBlocked(c.id, !c.blocked);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    }
+  }
+
+  /// Баннер «WhatsApp отключён» — сообщения сейчас не уходят.
+  Widget _channelBanner(ChannelStatus ch) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(15, 14, 15, 0),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFBEDEC),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFC6403C).withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        const Icon(Iconsax.warning_2, size: 20, color: Color(0xFFC6403C)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(ch.label, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: Color(0xFFC6403C))),
+            const SizedBox(height: 2),
+            const Text('Сообщения сейчас не отправляются. Проверьте подключение номера в Wazzup.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF8C3A36))),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  /// Стеклянная поисковая строка на тил-шапке: имя, номер или текст сообщения.
+  Widget _searchBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: TextField(
+        controller: _search,
+        onChanged: (v) => setState(() => _query = v),
+        textInputAction: TextInputAction.search,
+        cursorColor: Colors.white,
+        style: const TextStyle(fontSize: 14.5, color: Colors.white),
+        decoration: InputDecoration(
+          hintText: 'Поиск: имя или номер',
+          hintStyle: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.75)),
+          filled: false,
+          isDense: true,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 13),
+          prefixIcon: Icon(Iconsax.search_normal_1, size: 19, color: Colors.white.withValues(alpha: 0.85)),
+          suffixIcon: _query.isEmpty
+              ? null
+              : IconButton(
+                  icon: Icon(Iconsax.close_circle, size: 19, color: Colors.white.withValues(alpha: 0.85)),
+                  tooltip: 'Очистить',
+                  onPressed: () {
+                    _search.clear();
+                    setState(() => _query = '');
+                    FocusScope.of(context).unfocus();
+                  },
+                ),
         ),
       ),
     );
   }
 
-  Widget _tile(BuildContext context, FsConversation c, bool dark) {
-    final unread = c.unreadCount > 0;
-    final time = c.lastMessageAt != null ? DateFormat('HH:mm').format(c.lastMessageAt!) : '';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+  /// Время в списке чатов: сегодня — «14:32», вчера — «Вчера», раньше — дата.
+  static String _listTime(DateTime? d) {
+    if (d == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) return DateFormat('HH:mm').format(d);
+    if (diff == 1) return 'Вчера';
+    if (d.year == now.year) return DateFormat('dd.MM').format(d);
+    return DateFormat('dd.MM.yy').format(d);
+  }
+
+  /// Имя менеджера, ответившего последним (для превью в списке).
+  String? _lastAuthor(FsConversation c) {
+    if (!c.lastOutbound) return null;
+    final uid = c.lastAuthorId;
+    // Ответ не из нашего приложения — имя приходит от Wazzup.
+    if (uid == null || uid.isEmpty) {
+      final wz = (c.lastAuthorName ?? '').trim();
+      return wz.isEmpty ? null : wz.split(' ').first;
+    }
+    if (uid == 'auto') return 'Автоответ';
+    final managers = ref.watch(managersProvider).value ?? const <Map<String, dynamic>>[];
+    for (final u in managers) {
+      if (u['id'] == uid) {
+        final name = ((u['name'] as String?) ?? '').trim();
+        if (name.isNotEmpty) return name.split(' ').first;
+      }
+    }
+    return uid == ref.read(appConfigProvider).userId ? 'Вы' : null;
+  }
+
+  static bool _isToday(DateTime? d) {
+    if (d == null) return false;
+    final n = DateTime.now();
+    return d.year == n.year && d.month == n.month && d.day == n.day;
+  }
+
+  Widget _tile(BuildContext context, FsConversation c,
+      {required bool isVip, required bool isLead, bool isMassage = false}) {
+    final unread = c.unreadCount > 0 || c.manualUnread;
+    final time = _listTime(c.lastMessageAt);
+    final lastAuthor = _lastAuthor(c);
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 14, offset: const Offset(0, 4))],
+      ),
       child: Material(
-        color: dark ? const Color(0xFF1B242B) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(22),
         child: InkWell(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(22),
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FirebaseChatScreen(conversation: c))),
+          onLongPress: () => _chatActions(c, unread),
           child: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(13, 13, 14, 13),
             child: Row(children: [
-              Container(
-                width: 50, height: 50,
-                decoration: const BoxDecoration(shape: BoxShape.circle),
-                clipBehavior: Clip.antiAlias,
-                child: Image.asset(flagAsset(c.phone ?? c.id), fit: BoxFit.cover),
-              ),
+              _ChatAvatar(phone: c.phone ?? c.id, isVip: isVip, isLead: isLead),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
-                    Expanded(child: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: unread ? FontWeight.w700 : FontWeight.w600))),
-                    Text(time, style: TextStyle(fontSize: 12, color: unread ? AppColors.brand : context.semantic.textSecondary)),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(displayName(c.name),
+                            maxLines: 1,
+                            style: const TextStyle(
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w700,
+                                color: kInk,
+                                letterSpacing: -0.2,
+                                height: 1.0)),
+                      ),
+                    ),
+                    // Метка сохранённого клиента: VIP — золотая, лид — тил.
+                    if (c.blocked)
+                      const _TagChip(label: 'БЛОК', bg: Color(0xFFEDEDEF), fg: Color(0xFF74747C))
+                    else if (isVip)
+                      const _TagChip(label: 'VIP', bg: Color(0xFFFDF3D7), fg: Color(0xFF9A7208))
+                    else if (isLead)
+                      const _TagChip(label: 'ЛИД', bg: Color(0xFFDFF4EF), fg: kTealDeep),
+                    const Spacer(),
+                    const SizedBox(width: 8),
+                    Text(time,
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                            color: unread ? kTealDeep : kSub,
+                            fontFeatures: const [FontFeature.tabularFigures()])),
                   ]),
                   const SizedBox(height: 4),
                   Row(children: [
-                    Expanded(child: Text(c.preview ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: context.semantic.textSecondary))),
-                    if (unread) Container(
-                      margin: const EdgeInsets.only(left: 6),
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                      decoration: BoxDecoration(gradient: brandGradient, borderRadius: BorderRadius.circular(11)),
-                      child: Text('${c.unreadCount}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                    Expanded(
+                      child: Row(children: [
+                        // Кто ответил последним — как «Вы:» в WhatsApp.
+                        if (lastAuthor != null)
+                          Text('$lastAuthor: ',
+                              style: const TextStyle(fontSize: 12.5, color: kTealDeep, fontWeight: FontWeight.w700)),
+                        Expanded(
+                          child: Text(c.preview ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 12.5, color: kSub, fontWeight: unread ? FontWeight.w600 : FontWeight.w400)),
+                        ),
+                      ]),
                     ),
+                    if (unread)
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: EdgeInsets.symmetric(horizontal: c.unreadCount > 0 ? 7 : 6, vertical: c.unreadCount > 0 ? 2 : 6),
+                        decoration: BoxDecoration(color: kTeal, borderRadius: BorderRadius.circular(10)),
+                        child: c.unreadCount > 0
+                            ? Text('${c.unreadCount}',
+                                style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w700))
+                            : const SizedBox.shrink(), // ручная отметка — просто точка
+                      ),
                   ]),
                 ]),
               ),
@@ -118,27 +509,117 @@ class FirebaseConversationsScreen extends ConsumerWidget {
   }
 
   Widget _msg(IconData i, String t, String s) => Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(i, size: 54, color: AppColors.brand.withValues(alpha: 0.6)),
-            const SizedBox(height: 12),
-            Text(t, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(22)),
+              child: Icon(i, size: 34, color: kTeal),
+            ),
+            const SizedBox(height: 16),
+            Text(t, style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w700, color: kInk)),
             const SizedBox(height: 6),
-            Text(s, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+            Text(s, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: kSub)),
           ]),
         ),
       );
 }
 
-class _FbBadge extends StatelessWidget {
-  const _FbBadge();
+/// Мини-метка «VIP» / «ЛИД» рядом с именем в списке чатов.
+class _TagChip extends StatelessWidget {
+  const _TagChip({required this.label, required this.bg, required this.fg});
+  final String label;
+  final Color bg;
+  final Color fg;
+
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
-        child: const Text('Firebase', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFC97A0A))),
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(7)),
+      child: Text(label,
+          style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: fg, letterSpacing: 0.4)),
+    );
+  }
+}
+
+/// Есть ли assets/vip.png (проверяется один раз при старте экрана чатов).
+bool? vipAssetExists;
+
+/// Аватар чата: обычный — флаг страны; VIP — assets/vip.png (фолбэк — корона);
+/// лид — флаг с тил-бейджем-молнией.
+class _ChatAvatar extends StatelessWidget {
+  const _ChatAvatar({required this.phone, required this.isVip, required this.isLead});
+  final String phone;
+  final bool isVip;
+  final bool isLead;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 50.0;
+    final radius = BorderRadius.circular(size * 0.3);
+
+    if (isVip) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          border: Border.all(color: const Color(0xFFE7C14A), width: 1.4),
+          boxShadow: [BoxShadow(color: const Color(0xFFE7C14A).withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 3))],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(size * 0.3 - 1.4),
+          // Ассет грузим только если он точно есть — иначе фолбэк-корона
+          // (повторные неудачные загрузки лагали при скролле).
+          child: vipAssetExists == true
+              ? Image.asset('assets/vip.png', fit: BoxFit.cover)
+              : Container(
+                  color: const Color(0xFFB81F2D),
+                  alignment: Alignment.center,
+                  child: const Icon(Iconsax.crown_1, color: Color(0xFFFFE9A8), size: 26),
+                ),
+        ),
       );
+    }
+
+    final flag = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        border: Border.all(color: Colors.black.withValues(alpha: 0.07)),
+        image: DecorationImage(image: AssetImage(flagAsset(phone)), fit: BoxFit.cover),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 3))],
+      ),
+    );
+    if (!isLead) return flag;
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(clipBehavior: Clip.none, children: [
+        flag,
+        Positioned(
+          right: -4,
+          bottom: -4,
+          child: Container(
+            width: 21,
+            height: 21,
+            decoration: BoxDecoration(
+              color: kTeal,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+            ),
+            child: const Icon(Iconsax.flash_1, color: Colors.white, size: 11),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 
 /// «N в сети» (presence из Firestore). Тап — список имён.
@@ -147,26 +628,29 @@ class _FbOnlineBadge extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return StreamBuilder<List<PresenceUser>>(
-      stream: ref.watch(firebasePresenceServiceProvider).watch(),
-      builder: (context, snap) {
-        final online = snap.data ?? const [];
+    // Кэшированный provider вместо StreamBuilder — без лишних подписок.
+    final online = ref.watch(presenceUsersProvider).value ?? const <PresenceUser>[];
+    return Builder(
+      builder: (context) {
         if (online.isEmpty) return const SizedBox.shrink();
-        return GestureDetector(
-          onTap: () => _showList(context, ref, online),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-            decoration: BoxDecoration(
-              color: dark ? const Color(0xFF1B242B) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: dark ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+        // Стеклянная пилюля на тил-шапке.
+        return Material(
+          color: Colors.white.withValues(alpha: 0.18),
+          borderRadius: BorderRadius.circular(15),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(15),
+            onTap: () => _showList(context, ref, online),
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 13),
+              alignment: Alignment.center,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF6BF29B), shape: BoxShape.circle)),
+                const SizedBox(width: 7),
+                Text('${online.length} в сети',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+              ]),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF2ECC71), shape: BoxShape.circle)),
-              const SizedBox(width: 7),
-              Text('${online.length} в сети', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-            ]),
           ),
         );
       },
@@ -227,6 +711,43 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
 
   FsMessage? _replyTo; // сообщение, на которое отвечаем
 
+  // Блокировка контакта (скрытие из списка, без пушей/автоответов).
+  late bool _blocked = widget.conversation.blocked;
+
+  Future<void> _toggleBlock() async {
+    final block = !_blocked;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(block ? 'Заблокировать контакта?' : 'Разблокировать контакта?'),
+        content: Text(block
+            ? 'Чат скроется из списка (найти можно поиском), пуши и автоответы для этого контакта отключатся. Сообщения продолжат сохраняться.'
+            : 'Чат вернётся в список, пуши и автоответы снова заработают.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Отмена')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: block ? const Color(0xFFC6403C) : AppColors.brand),
+            onPressed: () => Navigator.pop(d, true),
+            child: Text(block ? 'Заблокировать' : 'Разблокировать'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(firestoreChatRepositoryProvider).setBlocked(widget.conversation.id, block);
+      if (mounted) {
+        setState(() => _blocked = block);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(block ? 'Контакт заблокирован' : 'Контакт разблокирован')),
+        );
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -245,6 +766,11 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     super.dispose();
   }
 
+  /// Текст, который уходит клиенту после звонка (обратно не звонить).
+  static const _afterCallText =
+      'Мы звонили Вам из клиники DR.TOITAYEV. Пожалуйста, не перезванивайте на этот номер — '
+      'напишите нам сюда, в WhatsApp, и мы всё решим в чате.';
+
   Future<void> _callPhone(String phone) async {
     final digits = phone.replaceAll(RegExp(r'[^0-9+]'), '');
     final uri = Uri.parse('tel:$digits');
@@ -254,6 +780,89 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось позвонить: $e')));
+      return;
+    }
+    // Возвращаемся в приложение — спрашиваем, чем закончился звонок.
+    if (!mounted) return;
+    await _askCallResult(phone);
+  }
+
+  /// Итог звонка: отметка в переписке + сообщение «пишите в чат».
+  Future<void> _askCallResult(String phone) async {
+    final res = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 10),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(3))),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Чем закончился звонок?', style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800, color: kInk)),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Iconsax.call_calling, color: Color(0xFF23A35F)),
+            title: const Text('Дозвонился', style: TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: const Text('Отметить в переписке'),
+            onTap: () => Navigator.pop(sheet, 'answered'),
+          ),
+          ListTile(
+            leading: const Icon(Iconsax.call_slash, color: Color(0xFFC6403C)),
+            title: const Text('Не ответил', style: TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: const Text('Отметить и написать «пишите в чат»'),
+            onTap: () => Navigator.pop(sheet, 'noAnswer'),
+          ),
+          ListTile(
+            leading: const Icon(Iconsax.close_circle, color: kSub),
+            title: const Text('Не записывать', style: TextStyle(fontWeight: FontWeight.w600)),
+            onTap: () => Navigator.pop(sheet),
+          ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (res == null || !mounted) return;
+
+    final cfg = ref.read(appConfigProvider);
+    final repo = ref.read(firestoreChatRepositoryProvider);
+    try {
+      await repo.logCall(
+        chatId: widget.conversation.id,
+        result: res,
+        authorId: cfg.userId ?? '',
+        authorName: cfg.userName ?? '',
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не записалось: $e')));
+    }
+    if (res != 'noAnswer' || !mounted) return;
+
+    // Предлагаем сразу отправить клиенту сообщение.
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Отправить сообщение?'),
+        content: const Text(_afterCallText),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Не надо')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kTeal),
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Отправить'),
+          ),
+        ],
+      ),
+    );
+    if (send != true) return;
+    try {
+      await repo.sendText(phone: phone, text: _afterCallText, name: widget.conversation.name);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не отправлено: $e')));
     }
   }
 
@@ -333,7 +942,6 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
         ]),
       ),
     );
-    debugPrint('[FB-PICK] выбор: $choice');
     if (choice == null) return;
 
     List<int>? bytes;
@@ -362,7 +970,6 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
       return;
     }
 
-    debugPrint('[FB-PICK] файл: $fileName ($mime), ${bytes.length} байт, kind=$kind');
     setState(() => _sending = true);
     try {
       await ref.read(firestoreChatRepositoryProvider).sendMedia(
@@ -375,7 +982,6 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
           );
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Медиа отправлено')));
     } catch (e) {
-      debugPrint('[FB-PICK] ❌ отправка медиа: $e');
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не отправлено: $e')));
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -516,7 +1122,19 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
             child: Image.asset(flagAsset(phone), fit: BoxFit.cover),
           ),
           const SizedBox(width: 10),
-          Expanded(child: Text(widget.conversation.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+          // FittedBox: номер/имя ужимается под ширину, а не режется в «…».
+          Expanded(
+            // Долгое нажатие по номеру — копирование.
+            child: GestureDetector(
+              onLongPress: () => copyPhone(context, phone),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(displayName(widget.conversation.name),
+                    maxLines: 1, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ),
         ]),
         actions: [
           IconButton(
@@ -524,11 +1142,99 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
             tooltip: 'Позвонить',
             onPressed: () => _callPhone(phone),
           ),
-          _pill('ЛИД', Icons.bolt_rounded, const [Color(0xFF20C9B6), Color(0xFF0E8F82)], const Color(0xFF13B0A0),
-              () => LeadSheet.show(context, name: widget.conversation.name, phone: phone)),
-          _pill('VIP', Icons.workspace_premium_rounded, const [Color(0xFFFF5566), Color(0xFFD11E31)], const Color(0xFFE23744),
-              () => VipClientSheet.show(context, name: widget.conversation.name, phone: phone)),
-          const SizedBox(width: 8),
+          // ЛИД / VIP / блокировка — в аккуратном меню «⋮».
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded, size: 22),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            onSelected: (v) {
+              switch (v) {
+                case 'copy':
+                  copyPhone(context, phone);
+                case 'lead':
+                  LeadSheet.show(context, name: widget.conversation.name, phone: phone);
+                case 'massage':
+                  MassageSheet.show(context, name: widget.conversation.name, phone: phone);
+                case 'vip':
+                  VipClientSheet.show(context, name: widget.conversation.name, phone: phone);
+                case 'block':
+                  _toggleBlock();
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'lead',
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(color: const Color(0xFF13B0A0).withValues(alpha: 0.13), borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Iconsax.flash_1, size: 17, color: Color(0xFF0E8F82)),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Создать лид', style: TextStyle(fontWeight: FontWeight.w600)),
+                ]),
+              ),
+              PopupMenuItem(
+                value: 'copy',
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(color: kSub.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Iconsax.copy, size: 17, color: kSub),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Скопировать номер', style: TextStyle(fontWeight: FontWeight.w600)),
+                ]),
+              ),
+              PopupMenuItem(
+                value: 'massage',
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(color: const Color(0xFFE3A008).withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Iconsax.health, size: 17, color: Color(0xFF8C5F04)),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Записать на массаж', style: TextStyle(fontWeight: FontWeight.w600)),
+                ]),
+              ),
+              PopupMenuItem(
+                value: 'vip',
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(color: const Color(0xFFE23744).withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Iconsax.crown_1, size: 17, color: Color(0xFFD11E31)),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Сделать VIP', style: TextStyle(fontWeight: FontWeight.w600)),
+                ]),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'block',
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: (_blocked ? kTealDeep : const Color(0xFFC6403C)).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(_blocked ? Icons.lock_open_rounded : Icons.block_rounded,
+                        size: 17, color: _blocked ? kTealDeep : const Color(0xFFC6403C)),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(_blocked ? 'Разблокировать' : 'Заблокировать',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ],
+          ),
+          const SizedBox(width: 4),
         ],
       ),
       body: Container(
@@ -547,7 +1253,19 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
                     reverse: true,
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     itemCount: msgs.length,
-                    itemBuilder: (context, i) => _bubble(msgs[msgs.length - 1 - i], dark),
+                    itemBuilder: (context, i) {
+                      final idx = msgs.length - 1 - i;
+                      final m = msgs[idx];
+                      // Разделитель даты — как в WhatsApp: перед первым
+                      // сообщением нового дня.
+                      final prev = idx > 0 ? msgs[idx - 1] : null;
+                      final newDay = m.createdAt != null &&
+                          (prev?.createdAt == null || !_sameDay(prev!.createdAt!, m.createdAt!));
+                      return Column(children: [
+                        if (newDay) _dateChip(m.createdAt!, dark),
+                        _bubble(m, dark),
+                      ]);
+                    },
                   ),
                 ),
           ),
@@ -558,34 +1276,98 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     );
   }
 
-  Widget _pill(String label, IconData icon, List<Color> colors, Color glow, VoidCallback onTap) {
+
+  static bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Плашка даты между сообщениями: «Сегодня» / «Вчера» / «23 июля 2026».
+  Widget _dateChip(DateTime d, bool dark) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    final diff = today.difference(day).inDays;
+    final label = diff == 0
+        ? 'Сегодня'
+        : diff == 1
+            ? 'Вчера'
+            : (d.year == now.year ? dateRu(d) : '${dateRu(d)} ${d.year}');
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 10),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
-            height: 30,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: colors),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.32), blurRadius: 7, offset: const Offset(0, 2))],
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(icon, color: Colors.white, size: 14),
-              const SizedBox(width: 4),
-              Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5, letterSpacing: 0.4)),
-            ]),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: dark ? const Color(0xFF223039) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: dark ? 0.25 : 0.06), blurRadius: 6, offset: const Offset(0, 2))],
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: dark ? Colors.white70 : const Color(0xFF5C736C))),
+      ),
+    );
+  }
+
+  /// Кто из менеджеров отправил (мелким текстом под сообщением).
+  String? _authorLabel(FsMessage m) {
+    if (!m.isOutbound || m.isDeleted) return null;
+    if (m.authorId == 'auto') return 'автоответ';
+    final uid = m.authorId;
+    if (uid == null || uid.isEmpty) {
+      final wz = (m.authorName ?? '').trim();
+      return wz.isEmpty ? null : wz;
+    }
+    // watch: подпись появится сама, когда список менеджеров подгрузится.
+    final managers = ref.watch(managersProvider).value ?? const <Map<String, dynamic>>[];
+    final me = ref.read(appConfigProvider).userId;
+    var name = '';
+    for (final u in managers) {
+      if (u['id'] == uid) {
+        name = ((u['name'] as String?) ?? '').trim();
+        break;
+      }
+    }
+    final who = name.isNotEmpty ? name : (uid == me ? 'вы' : 'менеджер');
+    return m.isBroadcast ? '$who · рассылка' : who;
+  }
+
+  /// Запись о звонке — отдельная центрированная плашка, не пузырь.
+  Widget _callNote(FsMessage m, bool dark) {
+    final answered = m.callResult == 'answered';
+    final color = answered ? const Color(0xFF23A35F) : const Color(0xFFC6403C);
+    final who = (m.authorName ?? '').trim();
+    final time = m.createdAt != null ? DateFormat('HH:mm').format(m.createdAt!) : '';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: dark ? const Color(0xFF223039) : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
           ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(answered ? Iconsax.call_calling : Iconsax.call_slash, size: 15, color: color),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                '${answered ? 'Звонок' : 'Звонок без ответа'}'
+                '${who.isEmpty ? '' : ' · $who'}'
+                '${time.isEmpty ? '' : ' · $time'}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color),
+              ),
+            ),
+          ]),
         ),
       ),
     );
   }
 
   Widget _bubble(FsMessage m, bool dark) {
+    if (m.type == 'call') return _callNote(m, dark);
     final out = m.isOutbound;
     final deleted = m.isDeleted;
     final hasMedia = !deleted && m.media != null && m.media!.isNotEmpty;
@@ -595,6 +1377,7 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
     final time = m.createdAt != null ? DateFormat('HH:mm').format(m.createdAt!) : '';
     final textColor = out ? Colors.white : (dark ? const Color(0xFFE9EEF0) : const Color(0xFF0E1B22));
     final metaColor = out ? Colors.white.withValues(alpha: 0.85) : (dark ? Colors.white54 : Colors.black38);
+    final author = _authorLabel(m);
     return Align(
       alignment: out ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
@@ -627,6 +1410,11 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
             Padding(
               padding: EdgeInsets.only(top: 2, right: isImage ? 8 : 0),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
+                // Кто ответил — мелким текстом рядом со временем.
+                if (author != null) ...[
+                  Text(author, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: metaColor)),
+                  Text(' · ', style: TextStyle(fontSize: 10, color: metaColor)),
+                ],
                 if (m.isEdited && !deleted) ...[
                   Text('изм.', style: TextStyle(fontSize: 10, color: metaColor)),
                   const SizedBox(width: 4),
@@ -664,15 +1452,33 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
   }
 
   Widget _mediaImage(String url) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 258, maxHeight: 320, minWidth: 160, minHeight: 110),
-        child: Image.network(
-          url,
-          fit: BoxFit.cover,
-          loadingBuilder: (c, w, p) => p == null ? w : Container(width: 200, height: 150, color: Colors.black12, alignment: Alignment.center, child: const CircularProgressIndicator(strokeWidth: 2)),
-          errorBuilder: (_, _, _) => Container(width: 200, height: 120, color: Colors.black12, alignment: Alignment.center, child: const Icon(Icons.broken_image_outlined, color: Colors.grey)),
+    return GestureDetector(
+      // Тап — открыть на весь экран с зумом.
+      onTap: () => Navigator.of(context).push(PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: Colors.black,
+        pageBuilder: (_, _, _) => PhotoViewerPage(url: url),
+        transitionsBuilder: (_, anim, _, child) => FadeTransition(opacity: anim, child: child),
+      )),
+      child: Hero(
+        tag: url,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 258, maxHeight: 320, minWidth: 160, minHeight: 110),
+            child: Image.network(
+              url,
+              fit: BoxFit.cover,
+              loadingBuilder: (c, w, p) => p == null
+                  ? w
+                  : Container(
+                      width: 200, height: 150, color: Colors.black12, alignment: Alignment.center,
+                      child: const CircularProgressIndicator(strokeWidth: 2)),
+              errorBuilder: (_, _, _) => Container(
+                  width: 200, height: 120, color: Colors.black12, alignment: Alignment.center,
+                  child: const Icon(Icons.broken_image_outlined, color: Colors.grey)),
+            ),
+          ),
         ),
       ),
     );
@@ -1072,4 +1878,124 @@ class _QuickRepliesSheetState extends ConsumerState<_QuickRepliesSheet> {
       ),
     );
   }
+}
+
+/// Полноэкранный просмотр фото: пинч-зум, двойной тап, свайп вниз — закрыть.
+class PhotoViewerPage extends StatefulWidget {
+  const PhotoViewerPage({super.key, required this.url});
+  final String url;
+
+  @override
+  State<PhotoViewerPage> createState() => _PhotoViewerPageState();
+}
+
+class _PhotoViewerPageState extends State<PhotoViewerPage> with SingleTickerProviderStateMixin {
+  final _ctrl = TransformationController();
+  late final AnimationController _anim =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
+  Animation<Matrix4>? _zoomAnim;
+  double _dragY = 0; // смещение для свайпа вниз
+
+  @override
+  void initState() {
+    super.initState();
+    _anim.addListener(() {
+      if (_zoomAnim != null) _ctrl.value = _zoomAnim!.value;
+    });
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  bool get _zoomed => _ctrl.value.getMaxScaleOnAxis() > 1.05;
+
+  /// Двойной тап: приблизить к точке касания / вернуть 1:1.
+  void _toggleZoom(TapDownDetails d) {
+    final target = _zoomed
+        ? Matrix4.identity()
+        : (Matrix4.identity()
+          ..translateByDouble(-d.localPosition.dx * 1.5, -d.localPosition.dy * 1.5, 0, 1)
+          ..scaleByDouble(2.5, 2.5, 1, 1));
+    _zoomAnim = Matrix4Tween(begin: _ctrl.value, end: target).animate(
+      CurvedAnimation(parent: _anim, curve: Curves.easeOutCubic),
+    );
+    _anim.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final opacity = (1 - (_dragY.abs() / 400)).clamp(0.35, 1.0);
+    return Scaffold(
+      backgroundColor: Colors.black.withValues(alpha: opacity),
+      body: Stack(children: [
+        // Свайп вниз закрывает (только когда не приближено).
+        GestureDetector(
+          onVerticalDragUpdate: _zoomed ? null : (d) => setState(() => _dragY += d.delta.dy),
+          onVerticalDragEnd: _zoomed
+              ? null
+              : (d) {
+                  if (_dragY.abs() > 110) {
+                    Navigator.of(context).pop();
+                  } else {
+                    setState(() => _dragY = 0);
+                  }
+                },
+          onDoubleTapDown: _toggleZoom,
+          onDoubleTap: () {},
+          child: Transform.translate(
+            offset: Offset(0, _dragY),
+            child: Center(
+              child: Hero(
+                tag: widget.url,
+                child: InteractiveViewer(
+                  transformationController: _ctrl,
+                  minScale: 1,
+                  maxScale: 5,
+                  child: Image.network(
+                    widget.url,
+                    fit: BoxFit.contain,
+                    loadingBuilder: (c, w, p) => p == null
+                        ? w
+                        : const SizedBox(
+                            height: 120, width: 120,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))),
+                    errorBuilder: (_, _, _) => const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text('Не удалось загрузить фото', style: TextStyle(color: Colors.white70)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Кнопки поверх.
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 6,
+          left: 8,
+          right: 8,
+          child: Row(children: [
+            _round(Icons.close_rounded, 'Закрыть', () => Navigator.of(context).pop()),
+            const Spacer(),
+            _round(Icons.open_in_new_rounded, 'Открыть в браузере',
+                () => launchUrl(Uri.parse(widget.url), mode: LaunchMode.externalApplication)),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _round(IconData icon, String tip, VoidCallback onTap) => Material(
+        color: Colors.black.withValues(alpha: 0.45),
+        shape: const CircleBorder(),
+        child: IconButton(
+          icon: Icon(icon, color: Colors.white, size: 22),
+          tooltip: tip,
+          onPressed: onTap,
+        ),
+      );
 }

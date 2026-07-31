@@ -8,9 +8,15 @@ import '../config/app_config.dart';
 import '../data/firebase_manager_service.dart';
 import '../data/firestore_chat_repository.dart';
 import '../data/lead_repository.dart';
+import '../data/massage_repository.dart';
 import '../data/autoreply_service.dart';
+import '../data/broadcast_repository.dart';
+import '../data/channel_status_service.dart';
 import '../data/presence_service.dart';
+import '../data/push_service.dart';
 import '../data/quick_replies_service.dart';
+import '../data/risk_service.dart';
+import '../data/session_service.dart';
 import '../data/vip_repository.dart';
 import '../models/models.dart';
 
@@ -24,6 +30,104 @@ final vipRepositoryProvider = Provider<VipRepository>((_) => VipRepository());
 
 /// Репозиторий лидов (Firestore, коллекция leads).
 final leadRepositoryProvider = Provider<LeadRepository>((_) => LeadRepository());
+
+/// Репозиторий записей на массаж (Firestore, коллекция massages).
+final massageRepositoryProvider = Provider<MassageRepository>((_) => MassageRepository());
+
+String _digits(String? s) => (s ?? '').replaceAll(RegExp(r'\D'), '');
+
+bool _isToday(DateTime? d) {
+  if (d == null) return false;
+  final n = DateTime.now();
+  return d.year == n.year && d.month == n.month && d.day == n.day;
+}
+
+/// Кэшированный список лидов (одна подписка на приложение).
+final leadsListProvider = StreamProvider((ref) => ref.watch(leadRepositoryProvider).watchAll());
+
+/// Кэшированный список VIP-клиентов (одна подписка на приложение).
+final vipClientsListProvider = StreamProvider((ref) => ref.watch(vipRepositoryProvider).watchAll());
+
+/// Кэшированный список записей на массаж (одна подписка на приложение).
+final massagesListProvider = StreamProvider((ref) => ref.watch(massageRepositoryProvider).watchAll());
+
+/// Телефоны (только цифры) активных записей на массаж — для пометки чатов.
+final massagePhonesProvider = Provider<Set<String>>((ref) {
+  final list = ref.watch(massagesListProvider).value ?? const [];
+  return {for (final m in list) if (!m.archived && _digits(m.phone).isNotEmpty) _digits(m.phone)};
+});
+
+/// Кэшированный presence (одна подписка вместо новой на каждый rebuild).
+final presenceUsersProvider = StreamProvider((ref) => ref.watch(firebasePresenceServiceProvider).watch());
+
+/// Кэшированный список менеджеров users/ (одна подписка).
+final managersProvider = StreamProvider((ref) => ref.watch(firebaseManagerServiceProvider).watchManagers());
+
+/// Пуш-уведомления (FCM).
+final pushServiceProvider = Provider<PushService>((_) => PushService());
+
+/// Состояние WhatsApp-канала в Wazzup.
+final channelStatusServiceProvider = Provider<ChannelStatusService>((_) => ChannelStatusService());
+
+/// Периодическая проверка канала (сразу и далее раз в 5 минут).
+final channelStatusProvider = StreamProvider<ChannelStatus>((ref) async* {
+  final svc = ref.watch(channelStatusServiceProvider);
+  while (true) {
+    yield await svc.load();
+    await Future<void>.delayed(const Duration(minutes: 5));
+  }
+});
+
+/// Единственная активная сессия (один менеджер в системе).
+final sessionServiceProvider = Provider<SessionService>((_) => SessionService());
+
+/// Кто сейчас занимает систему.
+final activeSessionProvider = StreamProvider((ref) => ref.watch(sessionServiceProvider).watch());
+
+/// Включено ли правило «один менеджер в системе» (админа не касается).
+final singleSessionEnabledProvider = StreamProvider((ref) => ref.watch(sessionServiceProvider).watchEnabled());
+
+/// Журнал подозрительной активности менеджеров (только для админа).
+final riskServiceProvider = Provider<RiskService>((_) => RiskService());
+
+/// События контроля за период: `days` = 0 (сегодня) / 7 / 30, `uid` — фильтр
+/// по менеджеру. autoDispose: подписка живёт, пока открыт экран.
+final riskEventsProvider =
+    StreamProvider.autoDispose.family<List<RiskEvent>, ({int days, String? uid})>((ref, arg) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final since = arg.days == 0 ? today : today.subtract(Duration(days: arg.days));
+  return ref.watch(riskServiceProvider).watch(since: since, uid: arg.uid);
+});
+
+/// Свои номера клиники (не считаются «чужим номером» в сообщении).
+final allowedPhonesProvider =
+    StreamProvider<List<String>>((ref) => ref.watch(riskServiceProvider).watchAllowedPhones());
+
+/// Серверная рассылка.
+final broadcastRepositoryProvider = Provider<BroadcastRepository>((_) => BroadcastRepository());
+
+/// Последняя рассылка (прогресс в реальном времени из Firestore).
+final latestBroadcastProvider = StreamProvider((ref) => ref.watch(broadcastRepositoryProvider).watchLatest());
+
+/// Телефоны (только цифры) активных VIP-клиентов — для пометки чатов.
+final vipPhonesProvider = Provider<Set<String>>((ref) {
+  final list = ref.watch(vipClientsListProvider).value ?? const [];
+  return {for (final c in list) if (!c.archived && _digits(c.phone).isNotEmpty) _digits(c.phone)};
+});
+
+/// Телефоны (только цифры) активных лидов — для пометки чатов.
+final leadPhonesProvider = Provider<Set<String>>((ref) {
+  final list = ref.watch(leadsListProvider).value ?? const [];
+  return {for (final l in list) if (!l.archived && _digits(l.phone).isNotEmpty) _digits(l.phone)};
+});
+
+/// Сколько лидов создано сегодня.
+final leadsTodayCountProvider = Provider<int>((ref) {
+  final list = ref.watch(leadsListProvider).value ?? const [];
+  return list.where((l) => !l.archived && _isToday(l.createdAt)).length;
+});
+
 
 /// Firebase Auth (миграция backend на Firebase).
 final firebaseAuthServiceProvider = Provider<FirebaseAuthService>((_) => FirebaseAuthService());

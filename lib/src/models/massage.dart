@@ -1,11 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// Лид (Firestore коллекция `leads`). Номер присваивается автоматически
-/// (атомарный счётчик counters/leads).
-class Lead {
-  Lead({
+/// Запись на массаж (Firestore коллекция `massages`). Номер присваивается
+/// автоматически (атомарный счётчик counters/massages).
+class Massage {
+  Massage({
     this.id,
-    this.leadNumber,
+    this.massageNumber,
     required this.name,
     this.phone,
     this.appointmentDate,
@@ -18,7 +18,7 @@ class Lead {
   });
 
   final String? id;
-  final int? leadNumber;
+  final int? massageNumber;
   final String name;
   final String? phone;
   final bool archived;
@@ -51,7 +51,7 @@ class Lead {
   }
 
   /// Карта для обновления: очищенные поля удаляются, заполненные — пишутся.
-  /// leadNumber/createdBy/createdAt не трогаем.
+  /// massageNumber/createdBy/createdAt не трогаем.
   Map<String, dynamic> toUpdateMap() {
     final full = <String, dynamic>{
       'name': name,
@@ -67,11 +67,11 @@ class Lead {
     });
   }
 
-  static Lead fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+  static Massage fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
-    return Lead(
+    return Massage(
       id: doc.id,
-      leadNumber: (d['leadNumber'] as num?)?.toInt(),
+      massageNumber: (d['massageNumber'] as num?)?.toInt(),
       name: (d['name'] as String?) ?? '',
       phone: d['phone'] as String?,
       appointmentDate: d['appointmentDate'] is Timestamp ? (d['appointmentDate'] as Timestamp).toDate() : null,

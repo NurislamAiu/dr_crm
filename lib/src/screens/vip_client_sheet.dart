@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../models/vip_client.dart';
 import '../state/providers.dart';
+import 'soft_ui.dart';
 
 const _vipRed = Color(0xFFE23744);
 const _vipRedDark = Color(0xFFC42232);
@@ -156,9 +157,7 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
-    } catch (e, st) {
-      debugPrint('[VIP] ❌ сохранение не удалось: $e');
-      debugPrint('$st');
+    } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
       final msg = e is FirebaseException
@@ -370,15 +369,10 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
       label: label,
       value: value != null ? DateFormat('dd.MM.yyyy').format(value) : null,
       onTap: () async {
-        final now = DateTime.now();
-        final d = await showDatePicker(
-          context: context,
-          initialDate: value ?? now,
-          firstDate: DateTime(now.year - 1),
-          lastDate: DateTime(now.year + 3),
-          builder: (ctx, child) => Theme(data: _pickerTheme(ctx), child: child!),
-        );
-        if (d != null) onPick(d);
+        // Простой календарь-сетка вместо системного диалога.
+        final res = await showSoftDatePicker(context, selected: value, accent: _vipRedDark);
+        if (res is DateTime) onPick(res);
+        if (res == clearDateSentinel) onPick(null);
       },
       onClear: value != null ? () => onPick(null) : null,
     );
@@ -395,12 +389,8 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
           context: context,
           initialTime: value ?? TimeOfDay.now(),
           builder: (ctx, child) => Theme(
-            data: _pickerTheme(ctx),
-            // Принудительно 24-часовой формат независимо от локали устройства.
-            child: MediaQuery(
-              data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
-              child: child!,
-            ),
+            data: Theme.of(ctx).copyWith(colorScheme: Theme.of(ctx).colorScheme.copyWith(primary: _vipRed)),
+            child: MediaQuery(data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true), child: child!),
           ),
         );
         if (t != null) onPick(t);
@@ -408,10 +398,6 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
       onClear: value != null ? () => onPick(null) : null,
     );
   }
-
-  ThemeData _pickerTheme(BuildContext ctx) => Theme.of(ctx).copyWith(
-        colorScheme: Theme.of(ctx).colorScheme.copyWith(primary: _vipRed),
-      );
 
   Widget _pickTile(bool dark, {required IconData icon, required String label, String? value, required VoidCallback onTap, VoidCallback? onClear}) {
     final fill = dark ? const Color(0xFF232E36) : const Color(0xFFF4F6F8);

@@ -18,21 +18,61 @@ class FirebasePresenceService {
   Timer? _hb;
   String? _uid;
   String? _name;
+  DocumentReference<Map<String, dynamic>>? _session;
 
   CollectionReference<Map<String, dynamic>> get _col => _db.collection('presence');
+  CollectionReference<Map<String, dynamic>> get _sessions => _db.collection('workSessions');
 
   void start(String uid, String name) {
     _uid = uid;
     _name = name;
     _write(true);
+    _openSession();
     _hb?.cancel();
-    _hb = Timer.periodic(const Duration(seconds: 45), (_) => _write(true));
+    _hb = Timer.periodic(const Duration(seconds: 45), (_) {
+      _write(true);
+      _touchSession();
+    });
   }
 
   void stop() {
     _hb?.cancel();
     _hb = null;
     if (_uid != null) _write(false);
+    _closeSession();
+  }
+
+  /// Новая рабочая сессия (для аналитики «когда зашёл/вышел»).
+  Future<void> _openSession() async {
+    final uid = _uid;
+    if (uid == null) return;
+    try {
+      _session = await _sessions.add({
+        'uid': uid,
+        'name': _name ?? '',
+        'startAt': FieldValue.serverTimestamp(),
+        'lastActiveAt': FieldValue.serverTimestamp(),
+        'endAt': null,
+      });
+    } catch (_) {}
+  }
+
+  /// Heartbeat сессии: если приложение убьют, конец сессии = lastActiveAt.
+  Future<void> _touchSession() async {
+    try {
+      await _session?.set({'lastActiveAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+    } catch (_) {}
+  }
+
+  Future<void> _closeSession() async {
+    final s = _session;
+    _session = null;
+    try {
+      await s?.set(
+        {'endAt': FieldValue.serverTimestamp(), 'lastActiveAt': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
+    } catch (_) {}
   }
 
   Future<void> _write(bool online) async {

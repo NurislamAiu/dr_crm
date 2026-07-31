@@ -14,7 +14,8 @@ class FirebaseManagersScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final me = ref.read(appConfigProvider).userId;
-    final stream = ref.watch(firebaseManagerServiceProvider).watchManagers();
+    // Кэшированный provider — не пересоздаём подписку на users при rebuild.
+    final managersAsync = ref.watch(managersProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Менеджеры', style: TextStyle(fontWeight: FontWeight.w800))),
       floatingActionButton: FloatingActionButton.extended(
@@ -30,12 +31,13 @@ class FirebaseManagersScreen extends ConsumerWidget {
             colors: dark ? const [Color(0xFF0E1519), Color(0xFF0B1013)] : const [Color(0xFFF4F7F8), Color(0xFFEDF2F2)],
           ),
         ),
-        child: StreamBuilder<List<Map<String, dynamic>>>(
-          stream: stream,
-          builder: (context, snap) {
-            if (snap.hasError) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Ошибка: ${snap.error}')));
-            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-            final users = snap.data!;
+        child: Builder(
+          builder: (context) {
+            if (managersAsync.hasError) {
+              return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Ошибка: ${managersAsync.error}')));
+            }
+            if (!managersAsync.hasValue) return const Center(child: CircularProgressIndicator());
+            final users = managersAsync.value!;
             return ListView(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
               children: [for (final u in users) _card(context, ref, u, u['id'] == me, dark)],

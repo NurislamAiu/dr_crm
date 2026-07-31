@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:iconsax/iconsax.dart';
 
 import '../state/providers.dart';
-import '../theme/app_theme.dart';
+import 'soft_ui.dart';
 
-/// Экран входа менеджера (JWT). Заменил DEV-заголовок x-user-id.
+/// Экран входа менеджера — только Firebase Auth (email + пароль).
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
@@ -13,28 +14,14 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  late final TextEditingController _api;
-  late final TextEditingController _rt;
-  final _email = TextEditingController(text: 'manager@example.com');
+  final _email = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
-  bool _showAdvanced = false;
+  bool _obscure = true;
   String? _error;
-  late String _backend;
-
-  @override
-  void initState() {
-    super.initState();
-    final c = ref.read(appConfigProvider);
-    _api = TextEditingController(text: c.apiBaseUrl);
-    _rt = TextEditingController(text: c.realtimeUrl);
-    _backend = c.backend;
-  }
 
   @override
   void dispose() {
-    _api.dispose();
-    _rt.dispose();
     _email.dispose();
     _password.dispose();
     super.dispose();
@@ -47,32 +34,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
     final config = ref.read(appConfigProvider);
     try {
-      await config.setBackend(_backend);
-      if (config.isFirebase) {
-        // Вход через Firebase Auth + профиль/роль из users/{uid}.
-        final auth = ref.read(firebaseAuthServiceProvider);
-        await auth.signIn(_email.text.trim(), _password.text);
-        final profile = await auth.loadProfile();
-        if (profile == null) {
-          await auth.signOut();
-          throw Exception('Профиль менеджера не найден (нет users/{uid})');
-        }
-        if (!profile.isActive) {
-          await auth.signOut();
-          throw Exception('Аккаунт отключён');
-        }
-        await config.setSession(token: 'firebase', userId: profile.uid, userName: profile.name, role: profile.role);
-      } else {
-        await config.setEndpoints(_api.text, _rt.text);
-        final data = await ref.read(apiClientProvider).login(_email.text.trim(), _password.text);
-        final user = data['user'] as Map<String, dynamic>;
-        await config.setSession(
-          token: data['token'] as String,
-          userId: user['id'] as String,
-          userName: user['name'] as String? ?? '',
-          role: user['role'] as String? ?? 'manager',
-        );
+      await config.setBackend('firebase');
+      // Вход через Firebase Auth + профиль/роль из users/{uid}.
+      final auth = ref.read(firebaseAuthServiceProvider);
+      await auth.signIn(_email.text.trim(), _password.text);
+      final profile = await auth.loadProfile();
+      if (profile == null) {
+        await auth.signOut();
+        throw Exception('Профиль менеджера не найден (нет users/{uid})');
       }
+      if (!profile.isActive) {
+        await auth.signOut();
+        throw Exception('Аккаунт отключён');
+      }
+      await config.setSession(token: 'firebase', userId: profile.uid, userName: profile.name, role: profile.role);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -82,39 +57,46 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final sem = context.semantic;
     return Scaffold(
+      backgroundColor: const Color(0xFFF1F8F6),
       body: Column(
         children: [
-          // Градиентный герой
+          // Тил-герой со скруглением.
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(28, 0, 28, 36),
-            decoration: const BoxDecoration(
-              gradient: brandGradient,
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(36)),
+            padding: const EdgeInsets.fromLTRB(28, 0, 28, 40),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [kTeal, kTealDeep],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(36)),
+              boxShadow: [BoxShadow(color: kTealDeep.withValues(alpha: 0.22), blurRadius: 22, offset: const Offset(0, 10))],
             ),
             child: SafeArea(
               bottom: false,
               child: Padding(
-                padding: const EdgeInsets.only(top: 40),
+                padding: const EdgeInsets.only(top: 42),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      width: 64,
-                      height: 64,
+                      width: 68,
+                      height: 68,
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(20),
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 14, offset: const Offset(0, 5))],
                       ),
-                      child: const Icon(Icons.chat_bubble_rounded, color: Colors.white, size: 34),
+                      child: Image.asset('assets/logo.png', fit: BoxFit.contain),
                     ),
                     const SizedBox(height: 20),
-                    const Text('CRM WhatsApp',
+                    const Text('DR.TOITAYEV',
                         style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
                     const SizedBox(height: 6),
-                    Text('Общение с клиентами в одном месте',
+                    Text('WhatsApp-CRM клиники',
                         style: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14)),
                   ],
                 ),
@@ -123,70 +105,64 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+              padding: const EdgeInsets.fromLTRB(24, 30, 24, 24),
               children: [
-                Text('Вход', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 12),
-                _label('Backend'),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'mac', label: Text('Mac (текущий)'), icon: Icon(Icons.dns_outlined)),
-                    ButtonSegment(value: 'firebase', label: Text('Firebase'), icon: Icon(Icons.cloud_outlined)),
-                  ],
-                  selected: {_backend},
-                  onSelectionChanged: _busy ? null : (s) => setState(() => _backend = s.first),
-                ),
+                const Text('Вход', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: kInk, letterSpacing: -0.3)),
                 const SizedBox(height: 16),
                 _label('Email'),
-                TextField(controller: _email, decoration: const InputDecoration(prefixIcon: Icon(Icons.mail_outline))),
+                TextField(
+                  controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  autocorrect: false,
+                  enabled: !_busy,
+                  style: const TextStyle(fontSize: 15, color: kInk),
+                  decoration: _fieldDeco(hint: 'manager@clinic.kz', prefix: const Icon(Iconsax.sms, size: 20, color: kSub)),
+                ),
                 const SizedBox(height: 14),
                 _label('Пароль'),
                 TextField(
                   controller: _password,
-                  obscureText: true,
-                  decoration: const InputDecoration(prefixIcon: Icon(Icons.lock_outline)),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    onPressed: () => setState(() => _showAdvanced = !_showAdvanced),
-                    child: Text(_showAdvanced ? 'Скрыть настройки сервера' : 'Настройки сервера'),
+                  obscureText: _obscure,
+                  enabled: !_busy,
+                  onSubmitted: (_) => _busy ? null : _login(),
+                  style: const TextStyle(fontSize: 15, color: kInk),
+                  decoration: _fieldDeco(
+                    hint: '••••••••',
+                    prefix: const Icon(Iconsax.lock_1, size: 20, color: kSub),
+                    suffix: IconButton(
+                      icon: Icon(_obscure ? Iconsax.eye_slash : Iconsax.eye, size: 20, color: kSub),
+                      tooltip: _obscure ? 'Показать пароль' : 'Скрыть пароль',
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                    ),
                   ),
                 ),
-                if (_showAdvanced) ...[
-                  _label('API base URL'),
-                  TextField(controller: _api, decoration: const InputDecoration(prefixIcon: Icon(Icons.dns_outlined))),
-                  const SizedBox(height: 14),
-                  _label('Realtime URL'),
-                  TextField(controller: _rt, decoration: const InputDecoration(prefixIcon: Icon(Icons.bolt_outlined))),
-                  const SizedBox(height: 8),
-                ],
                 if (_error != null)
                   Container(
-                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    margin: const EdgeInsets.only(top: 14),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
+                      color: const Color(0xFFFBEDEC),
+                      borderRadius: BorderRadius.circular(14),
                     ),
                     child: Row(children: [
-                      const Icon(Icons.error_outline, color: Colors.red, size: 18),
+                      const Icon(Iconsax.info_circle, color: Color(0xFFC6403C), size: 18),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(_error!, style: const TextStyle(color: Colors.red))),
+                      Expanded(child: Text(_error!, style: const TextStyle(color: Color(0xFFC6403C), fontSize: 13))),
                     ]),
                   ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: _busy ? null : _login,
-                  child: _busy
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('Войти'),
-                ),
-                const SizedBox(height: 14),
-                Center(
-                  child: Text('DEV: manager@example.com / password',
-                      style: TextStyle(fontSize: 12, color: sem.textSecondary)),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 54,
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: kTeal,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                    ),
+                    onPressed: _busy ? null : _login,
+                    child: _busy
+                        ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+                        : const Text('Войти', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  ),
                 ),
               ],
             ),
@@ -196,8 +172,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
+  /// Белое поле с мягкой рамкой — не сливается с фоном страницы.
+  InputDecoration _fieldDeco({String? hint, Widget? prefix, Widget? suffix}) => InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(fontSize: 14.5, color: kSub.withValues(alpha: 0.55)),
+        filled: true,
+        fillColor: Colors.white,
+        prefixIcon: prefix,
+        suffixIcon: suffix,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: kTeal, width: 1.6),
+        ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.06)),
+        ),
+      );
+
   Widget _label(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 6, left: 4),
-        child: Text(text, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: context.semantic.textSecondary)),
+        child: Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: kSub)),
       );
 }

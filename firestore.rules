@@ -19,6 +19,11 @@ service cloud.firestore {
       return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    function isAdmin() {
+      return isManager()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'administrator'];
+    }
+
     // Профили менеджеров: читают менеджеры, пишет только сервер (Admin SDK).
     match /users/{uid} {
       allow read: if isManager();
@@ -36,8 +41,11 @@ service cloud.firestore {
       allow read, write: if isManager();
     }
 
-    // Лиды / VIP-клиенты / счётчики / быстрые ответы — только менеджеры.
+    // Лиды / массаж / VIP-клиенты / счётчики / быстрые ответы — менеджеры.
     match /leads/{id} {
+      allow read, write: if isManager();
+    }
+    match /massages/{id} {
       allow read, write: if isManager();
     }
     match /clients/{id} {
@@ -51,14 +59,63 @@ service cloud.firestore {
     }
 
     // Настройки (автоответчик и т.п.) — только менеджеры.
+    // config/risk (белый список номеров) правит только админ — иначе менеджер
+    // мог бы сам себя вывести из-под контроля.
+    match /config/risk {
+      allow read: if isManager();
+      allow write: if isAdmin();
+    }
     match /config/{id} {
-      allow read, write: if isManager();
+      allow read: if isManager();
+      allow write: if isManager() && id != 'risk';
     }
 
     // Присутствие: читают менеджеры, пишет только сам о себе.
     match /presence/{uid} {
       allow read: if isManager();
       allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Рабочие сессии (аналитика «когда зашёл/вышел»): читают менеджеры,
+    // создаёт/обновляет каждый только свои (uid внутри документа).
+    match /workSessions/{id} {
+      allow read: if isManager();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if signedIn() && resource.data.uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // FCM-токены для пушей: каждый читает/пишет только свой документ
+    // (чтение — для переключателя «Уведомления» в настройках).
+    match /fcmTokens/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Активная сессия: один менеджер в системе (перезаписывает любой менеджер).
+    match /sessions/{id} {
+      allow read, write: if isManager();
+    }
+
+    // Серверная рассылка: создаёт только админ, обрабатывает Cloud Function.
+    // Клиент может лишь остановить (status='stopped').
+    match /broadcasts/{id} {
+      allow read: if isManager();
+      allow create: if isAdmin() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status == 'stopped';
+      allow delete: if false;
+    }
+
+    // Контроль подозрительной активности: пишет только сервер (Admin SDK),
+    // читает только админ — менеджеры свой журнал не видят и не правят.
+    match /riskEvents/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /riskState/{uid} {
+      allow read, write: if false;
     }
 
     // Всё остальное — запрещено.

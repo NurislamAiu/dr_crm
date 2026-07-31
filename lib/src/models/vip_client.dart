@@ -50,11 +50,15 @@ class VipClient {
     this.notes,
     this.archived = false,
     this.createdAt,
+    this.createdBy,
   });
 
   final String? id;
   final bool archived;
   final DateTime? createdAt;
+
+  /// uid менеджера-создателя (пишется репозиторием, только чтение).
+  final String? createdBy;
 
   // Личные данные
   final String? clientNumber;
@@ -175,6 +179,7 @@ class VipClient {
       notes: d['notes'] as String?,
       archived: d['archived'] == true,
       createdAt: (d['createdAt'] as Timestamp?)?.toDate(),
+      createdBy: d['createdBy'] as String?,
     );
   }
 }

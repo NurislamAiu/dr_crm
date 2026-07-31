@@ -12,6 +12,11 @@ class FsConversation {
     required this.preview,
     required this.lastMessageAt,
     required this.unreadCount,
+    this.lastOutbound = false,
+    this.lastAuthorId,
+    this.lastAuthorName,
+    this.manualUnread = false,
+    this.blocked = false,
   });
   final String id;
   final String name;
@@ -19,6 +24,21 @@ class FsConversation {
   final String? preview;
   final DateTime? lastMessageAt;
   final int unreadCount;
+
+  /// Последнее сообщение — исходящее (ответ менеджера).
+  final bool lastOutbound;
+
+  /// uid менеджера, ответившего последним ('auto' — автоответчик).
+  final String? lastAuthorId;
+
+  /// Имя автора из Wazzup (ответ из интерфейса Wazzup/WhatsApp).
+  final String? lastAuthorName;
+
+  /// Отмечен непрочитанным вручную (как в WhatsApp).
+  final bool manualUnread;
+
+  /// Заблокирован менеджером: скрыт из списка, без пушей и автоответов.
+  final bool blocked;
 
   static FsConversation fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
@@ -29,6 +49,11 @@ class FsConversation {
       preview: d['lastMessagePreview'] as String?,
       lastMessageAt: (d['lastMessageAt'] as Timestamp?)?.toDate(),
       unreadCount: (d['unreadCount'] as num?)?.toInt() ?? 0,
+      lastOutbound: d['lastOutbound'] == true,
+      lastAuthorId: d['lastAuthorId'] as String?,
+      lastAuthorName: d['lastAuthorName'] as String?,
+      manualUnread: d['manualUnread'] == true,
+      blocked: d['blocked'] == true,
     );
   }
 }
@@ -47,6 +72,10 @@ class FsMessage {
     required this.isEdited,
     required this.isDeleted,
     required this.replyToText,
+    this.authorId,
+    this.authorName,
+    this.callResult,
+    this.isBroadcast = false,
   });
   final String id;
   final String direction; // inbound | outbound
@@ -59,6 +88,18 @@ class FsMessage {
   final bool isEdited;
   final bool isDeleted;
   final String? replyToText;
+
+  /// uid менеджера-отправителя ('auto' — автоответчик).
+  final String? authorId;
+
+  /// Имя автора из Wazzup (когда отвечали не из нашего приложения).
+  final String? authorName;
+
+  /// Результат звонка: answered | noAnswer (для type == 'call').
+  final String? callResult;
+
+  /// Сообщение ушло рассылкой.
+  final bool isBroadcast;
 
   bool get isOutbound => direction == 'outbound';
   String? get media => mediaUrl ?? contentUri;
@@ -77,6 +118,10 @@ class FsMessage {
       isEdited: d['isEdited'] == true,
       isDeleted: d['isDeleted'] == true,
       replyToText: d['replyToText'] as String?,
+      authorId: d['authorId'] as String?,
+      authorName: d['authorName'] as String?,
+      callResult: d['callResult'] as String?,
+      isBroadcast: d['isBroadcast'] == true,
     );
   }
 }
@@ -101,7 +146,6 @@ class FirestoreChatRepository {
       final elapsed = now.difference(_lastSendAt!);
       if (elapsed < _minGap) {
         final wait = _minGap - elapsed;
-        debugPrint('[FB-SEND] троттлинг: пауза ${wait.inMilliseconds} мс (анти-бан)');
         await Future.delayed(wait);
       }
     }
@@ -109,17 +153,17 @@ class FirestoreChatRepository {
   }
 
   Stream<List<FsConversation>> watchConversations() {
-    debugPrint('[FB] подписка на conversations');
-    return _db.collection('conversations').orderBy('lastMessageAt', descending: true).snapshots().map(
-      (s) {
-        debugPrint('[FB] conversations: ${s.docs.length} шт.');
-        return s.docs.map(FsConversation.fromDoc).toList();
-      },
-    );
+    // limit(500): коллекция растёт бесконечно, без лимита каждый запуск
+    // приложения читал бы ВСЕ диалоги (деньги за reads). 500 свежих хватает.
+    return _db
+        .collection('conversations')
+        .orderBy('lastMessageAt', descending: true)
+        .limit(500)
+        .snapshots()
+        .map((s) => s.docs.map(FsConversation.fromDoc).toList());
   }
 
   Stream<List<FsMessage>> watchMessages(String conversationId) {
-    debugPrint('[FB] подписка на messages conversationId=$conversationId');
     // Последние 100 (desc + limit), затем разворот для показа снизу вверх.
     return _db
         .collection('messages')
@@ -128,33 +172,64 @@ class FirestoreChatRepository {
         .limit(100)
         .snapshots()
         .map((s) {
-      debugPrint('[FB] messages($conversationId): ${s.docs.length} шт.');
       return s.docs.map(FsMessage.fromDoc).toList().reversed.toList();
     });
   }
 
   Future<void> markRead(String conversationId) {
-    return _db.collection('conversations').doc(conversationId).set({'unreadCount': 0}, SetOptions(merge: true));
+    return _db
+        .collection('conversations')
+        .doc(conversationId)
+        .set({'unreadCount': 0, 'manualUnread': false}, SetOptions(merge: true));
+  }
+
+  /// Записать звонок менеджера в переписку (внутренняя отметка — клиенту
+  /// ничего не уходит). [result]: answered | noAnswer.
+  Future<void> logCall({
+    required String chatId,
+    required String result,
+    required String authorId,
+    required String authorName,
+  }) async {
+    await _db.collection('messages').add({
+      'conversationId': chatId,
+      'chatId': chatId,
+      'direction': 'outbound',
+      'type': 'call',
+      'callResult': result,
+      'authorId': authorId,
+      'authorName': authorName,
+      'isInternal': true, // не отправлялось в WhatsApp
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Отметить чат непрочитанным вручную (как в WhatsApp) — бейдж вернётся,
+  /// пока чат снова не откроют.
+  Future<void> markUnread(String conversationId) {
+    return _db
+        .collection('conversations')
+        .doc(conversationId)
+        .set({'manualUnread': true}, SetOptions(merge: true));
   }
 
   /// Отправка текста через Cloud Function (sendMessage → Wazzup + Firestore).
   /// [refMessageId] — ответ (цитата) на сообщение.
   Future<void> sendText({required String phone, required String text, String? name, String? refMessageId, String? replyToText}) async {
-    debugPrint('[FB-SEND] текст → $phone: "${text.length > 30 ? '${text.substring(0, 30)}…' : text}"${refMessageId != null ? ' (ответ)' : ''}');
     await _throttle();
     final callable = _functions.httpsCallable('sendMessage');
     final data = <String, dynamic>{'phone': phone, 'text': text};
     if (name != null) data['name'] = name;
     if (refMessageId != null) data['refMessageId'] = refMessageId;
     if (replyToText != null) data['replyToText'] = replyToText;
-    try {
-      final res = await callable.call<Map<String, dynamic>>(data);
-      debugPrint('[FB-SEND] ✅ sendMessage ответ: ${res.data}');
-    } catch (e) {
-      debugPrint('[FB-SEND] ❌ sendMessage ошибка: $e');
-      rethrow;
-    }
+    await callable.call<Map<String, dynamic>>(data);
   }
+
+  /// Заблокировать/разблокировать контакт (скрытие из списка, без пушей).
+  Future<void> setBlocked(String chatId, bool value) => _db
+      .collection('conversations')
+      .doc(chatId)
+      .set({'blocked': value, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
 
   /// Редактировать своё сообщение (Wazzup PATCH + Firestore).
   Future<void> editText({required String messageId, required String text}) async {
@@ -178,37 +253,22 @@ class FirestoreChatRepository {
     final token = _uuidLike();
     final ext = fileName.contains('.') ? fileName.split('.').last : '';
     final path = 'media/out/${DateTime.now().millisecondsSinceEpoch}_$token${ext.isNotEmpty ? '.$ext' : ''}';
-    debugPrint('[FB-MEDIA] старт: $kind, ${bytes.length} байт, $contentType → Storage: $path');
-    debugPrint('[FB-MEDIA] bucket=${FirebaseStorage.instance.bucket}');
     final ref = FirebaseStorage.instance.ref(path);
     try {
       final task = ref.putData(Uint8List.fromList(bytes), SettableMetadata(contentType: contentType));
-      task.snapshotEvents.listen(
-        (s) => debugPrint('[FB-MEDIA] прогресс: ${s.bytesTransferred}/${s.totalBytes} state=${s.state}'),
-        onError: (e) => debugPrint('[FB-MEDIA] событие-ошибка: $e'),
-      );
       await task.timeout(const Duration(seconds: 45), onTimeout: () {
         throw Exception('Таймаут загрузки в Storage (45с) — данные не идут (проверь правила Storage / App Check)');
       });
-      debugPrint('[FB-MEDIA] ✅ загружено в Storage');
     } catch (e) {
-      debugPrint('[FB-MEDIA] ❌ ошибка загрузки в Storage: $e');
       rethrow;
     }
     final mediaUrl = await ref.getDownloadURL();
-    debugPrint('[FB-MEDIA] URL: $mediaUrl');
 
     await _throttle();
     final callable = _functions.httpsCallable('sendMedia');
     final data = <String, dynamic>{'phone': phone, 'mediaPath': path, 'mediaUrl': mediaUrl, 'type': kind};
     if (name != null) data['name'] = name;
-    try {
-      final res = await callable.call<Map<String, dynamic>>(data);
-      debugPrint('[FB-MEDIA] ✅ sendMedia ответ: ${res.data}');
-    } catch (e) {
-      debugPrint('[FB-MEDIA] ❌ sendMedia ошибка: $e');
-      rethrow;
-    }
+    await callable.call<Map<String, dynamic>>(data);
   }
 
   String _uuidLike() {

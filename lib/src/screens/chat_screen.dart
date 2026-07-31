@@ -182,9 +182,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final f = res?.files.isNotEmpty == true ? res!.files.first : null;
         if (f == null || f.bytes == null) return;
         bytes = f.bytes!;
+        final fName = f.name;
         // Расширение берём у file_picker (надёжнее, чем парсить имя).
-        final ext = (f.extension ?? (f.name.contains('.') ? f.name.split('.').last : '')).toLowerCase();
-        name = f.name.contains('.') || ext.isEmpty ? f.name : '${f.name}.$ext';
+        final ext = (f.extension ?? (fName.contains('.') ? fName.split('.').last : '')).toLowerCase();
+        name = fName.contains('.') || ext.isEmpty ? fName : '$fName.$ext';
         mime = _mimeFromName('x.$ext');
       }
     } catch (e) {

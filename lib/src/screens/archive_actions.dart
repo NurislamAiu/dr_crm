@@ -10,6 +10,7 @@ class ArchiveActions extends StatelessWidget {
     required this.archived,
     required this.label,
     required this.onTap,
+    this.onLongPress,
     required this.onArchive,
     required this.onRestore,
     required this.onDeleteForever,
@@ -20,6 +21,9 @@ class ArchiveActions extends StatelessWidget {
   final bool archived;
   final String label;
   final VoidCallback? onTap;
+
+  /// Долгое нажатие (копирование номера).
+  final VoidCallback? onLongPress;
   final Future<void> Function() onArchive;
   final Future<void> Function() onRestore;
   final Future<void> Function() onDeleteForever;
@@ -45,13 +49,18 @@ class ArchiveActions extends StatelessWidget {
         onDismissed: (_) async {
           await onArchive();
           if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: const Text('В архиве'),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(label: 'Отменить', onPressed: () => onRestore()),
-          ));
+          // Прячем предыдущий снекбар, иначе при серии архивирований они
+          // копятся в очередь и висят на экране.
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(
+              content: const Text('В архиве'),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+              action: SnackBarAction(label: 'Отменить', onPressed: () => onRestore()),
+            ));
         },
-        child: GestureDetector(onTap: onTap, behavior: HitTestBehavior.opaque, child: child),
+        child: GestureDetector(onTap: onTap, onLongPress: onLongPress, behavior: HitTestBehavior.opaque, child: child),
       );
     }
 

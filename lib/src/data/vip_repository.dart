@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -25,35 +24,19 @@ class VipRepository {
     data['createdAt'] = FieldValue.serverTimestamp();
     data['updatedAt'] = FieldValue.serverTimestamp();
 
-    debugPrint('[VIP] ── создание клиента ──────────────');
-    debugPrint('[VIP] Firebase apps: ${Firebase.apps.length} ${Firebase.apps.map((a) => a.name).toList()}');
     if (Firebase.apps.isEmpty) {
-      debugPrint('[VIP] ❌ Firebase НЕ инициализирован. Запустите `flutterfire configure` и пересоберите.');
     }
-    debugPrint('[VIP] project: ${Firebase.apps.isNotEmpty ? Firebase.app().options.projectId : "—"}');
-    debugPrint('[VIP] createdBy(uid): $createdBy');
-    debugPrint('[VIP] поля: ${data.keys.toList()}');
 
     try {
       final ref = await _col.add(data);
-      debugPrint('[VIP] ✅ сохранено: clients/${ref.id}');
       return ref.id;
-    } on FirebaseException catch (e, st) {
-      debugPrint('[VIP] ❌ FirebaseException plugin=${e.plugin} code=${e.code}');
-      debugPrint('[VIP]    message: ${e.message}');
+    } on FirebaseException catch (e) {
       if (e.code == 'permission-denied') {
-        debugPrint('[VIP]    → правила Firestore запрещают запись. Включите test-режим '
-            'или разрешите write в firestore.rules.');
       } else if (e.code == 'unavailable') {
-        debugPrint('[VIP]    → нет сети / Firestore недоступен.');
       } else if (e.code == 'not-found') {
-        debugPrint('[VIP]    → база Firestore не создана в консоли (Build → Firestore Database → Create).');
       }
-      debugPrint('$st');
       rethrow;
-    } catch (e, st) {
-      debugPrint('[VIP] ❌ ошибка: $e');
-      debugPrint('$st');
+    } catch (e) {
       rethrow;
     }
   }
@@ -64,6 +47,10 @@ class VipRepository {
     data['updatedAt'] = FieldValue.serverTimestamp();
     await _col.doc(id).set(data, SetOptions(merge: true));
   }
+
+  /// Быстрая смена статуса.
+  Future<void> setStatus(String id, VipStatus status) =>
+      _col.doc(id).set({'status': status.name, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
 
   /// В архив / из архива (мягкое удаление).
   Future<void> archive(String id, bool value) =>
