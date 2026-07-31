@@ -95,6 +95,13 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
 
       const inbound = !m.isEcho;
       const type = m.type ?? "text";
+      // Эхо нашего исходящего может прийти сразу со status=error — причина
+      // приходит здесь, а не в statuses. Сохраняем её и пишем в лог.
+      const echoError =
+        !inbound && m.status === "error"
+          ? String(typeof m.error === "string" ? m.error : m.error ? JSON.stringify(m.error) : "нет описания").slice(0, 300)
+          : null;
+      if (echoError) console.error("wazzup echo error raw", JSON.stringify(m));
       if (inbound) inboundChats.add(chatId);
       if (inbound && type === "missing_call") missedCallChats.add(chatId);
       const text = m.text ?? null;
@@ -167,7 +174,12 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
         // Это эхо уже сохранённого сообщения — только дополняем.
         batch.set(
           twinRef,
-          { externalMessageId: m.messageId, status: m.status ?? "sent", echoMessageId: m.messageId },
+          {
+            externalMessageId: m.messageId,
+            status: m.status ?? "sent",
+            echoMessageId: m.messageId,
+            ...(echoError ? { statusError: echoError } : {}),
+          },
           { merge: true },
         );
       } else {
@@ -183,6 +195,7 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
             text,
             contentUri: m.contentUri ?? null,
             status: inbound ? "received" : (m.status ?? "sent"),
+            ...(echoError ? { statusError: echoError } : {}),
             authorName: m.authorName ?? null,
             createdAt,
           },
@@ -199,10 +212,23 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
     // существующие, иначе ищем по externalMessageId.
     for (const s of statuses) {
       if (!s.messageId || !s.status) continue;
+      // Причина ошибки от Wazzup: без неё «error» в чате ничего не объясняет.
+      const reason =
+        s.status === "error"
+          ? String(
+              s.errorDescription ??
+                s.description ??
+                (typeof s.error === "string" ? s.error : s.error ? JSON.stringify(s.error) : ""),
+            ).slice(0, 300)
+          : null;
+      // Пишем целиком: имена полей с причиной у Wazzup не задокументированы.
+      if (s.status === "error") console.error("wazzup status error raw", JSON.stringify(s));
+      const patch = { status: s.status, statusAt: ts(), ...(reason ? { statusError: reason } : {}) };
+
       const ref = firestore.collection("messages").doc(String(s.messageId));
       const snap = await ref.get();
       if (snap.exists) {
-        await ref.set({ status: s.status, statusAt: ts() }, { merge: true });
+        await ref.set(patch, { merge: true });
         continue;
       }
       const found = await firestore
@@ -211,7 +237,7 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
         .limit(1)
         .get();
       if (!found.empty) {
-        await found.docs[0]!.ref.set({ status: s.status, statusAt: ts() }, { merge: true });
+        await found.docs[0]!.ref.set(patch, { merge: true });
       }
     }
 
@@ -540,6 +566,104 @@ export const repairManagers = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, as
     cleaned: req.query.cleanup === "1" ? orphans.length : 0,
   });
 });
+
+/**
+ * Диагностика отправки: состояние канала в Wazzup, счётчики лимита и очередь.
+ * Отвечает на вопрос «почему не уходит сообщение».
+ *
+ * GET /opsStatus?secret=<webhook secret>
+ */
+export const opsStatus = onRequest(
+  { secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] },
+  async (req, res) => {
+    if ((req.query.secret as string | undefined) !== WAZZUP_WEBHOOK_SECRET.value()) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    const firestore = db();
+
+    // 1. Канал WhatsApp в Wazzup.
+    let channel: Record<string, unknown> = { state: "unknown" };
+    try {
+      const r = await fetch("https://api.wazzup24.com/v3/channels", {
+        headers: { Authorization: `Bearer ${WAZZUP_API_KEY.value()}` },
+      });
+      if (!r.ok) {
+        channel = { state: "http_error", status: r.status };
+      } else {
+        const body = (await r.json()) as unknown;
+        const list = (Array.isArray(body) ? body : ((body as { data?: unknown[] }).data ?? [])) as Record<string, unknown>[];
+        const want = WAZZUP_CHANNEL_ID.value();
+        const ch = list.find((c) => c.channelId === want) ?? list[0];
+        channel = ch
+          ? {
+              state: ch.state,
+              phone: ch.plainId ?? ch.name ?? "",
+              transport: ch.transport,
+              channels: list.length,
+              // Все каналы аккаунта: вдруг есть запасной рабочий номер.
+              all: list.map((c) => ({
+                channelId: c.channelId,
+                phone: c.plainId ?? c.name ?? "",
+                transport: c.transport,
+                state: c.state,
+                current: c.channelId === want,
+              })),
+            }
+          : { state: "not_found", channels: list.length };
+      }
+    } catch (e) {
+      channel = { state: "error", error: String(e instanceof Error ? e.message : e) };
+    }
+
+    // 2. Лимит темпа и счётчики канала.
+    const lim = await limits();
+    const chDoc = (await firestore.doc("riskState/_channel").get()).data() ?? {};
+    const now = Date.now();
+    const sends = ((chDoc.sends ?? []) as unknown[]).filter((t): t is number => typeof t === "number");
+    const hour = sends.filter((t) => now - t < 3600_000).length;
+
+    // 3. Очередь.
+    const pend = await firestore.collection("outbox").where("status", "==", "pending").limit(50).get();
+    const failed = await firestore.collection("outbox").where("status", "==", "failed").limit(20).get();
+
+    // 4. Последние исходящие: дошли ли до Wazzup и какой у них статус.
+    // Без where по direction — иначе нужен отдельный индекс; фильтруем в коде.
+    const recent = await firestore.collection("messages").orderBy("createdAt", "desc").limit(60).get();
+    const outs = { docs: recent.docs.filter((d) => d.data().direction === "outbound").slice(0, 8) };
+
+    res.json({
+      ok: true,
+      channel,
+      limits: lim,
+      counters: { hour, day: chDoc.day ?? null, dayCount: chDoc.dayCount ?? 0 },
+      lastOutbound: outs.docs.map((d) => {
+        const x = d.data();
+        return {
+          at: (x.createdAt as admin.firestore.Timestamp | undefined)?.toDate().toISOString() ?? null,
+          chatId: x.chatId ?? x.conversationId ?? "",
+          status: x.status ?? "",
+          reason: x.statusError ?? null,
+          author: x.authorId ?? x.authorName ?? "",
+          external: x.externalMessageId ? "есть" : "нет",
+          text: String(x.text ?? "").slice(0, 60),
+        };
+      }),
+      queue: {
+        pending: pend.size,
+        failed: failed.size,
+        lastErrors: failed.docs.slice(0, 5).map((d) => ({
+          chatId: d.data().chatId,
+          attempts: d.data().attempts,
+          error: String(d.data().error ?? "").slice(0, 160),
+        })),
+        oldestPending: pend.docs[0]
+          ? { chatId: pend.docs[0].data().chatId, reason: pend.docs[0].data().reason ?? null }
+          : null,
+      },
+    });
+  },
+);
 
 export const createManager = onCall(async (request) => {
   const uid = request.auth?.uid;

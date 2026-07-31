@@ -23,12 +23,18 @@ export interface WazzupMessage {
   dateTime?: string;
   authorName?: string | null;
   channelId?: string;
+  /** Для status=error приходит причина (структура как в statuses). */
+  error?: unknown;
 }
 
 export interface WazzupStatus {
   messageId?: string;
   status?: string;
   timestamp?: string;
+  /** Для status=error Wazzup присылает причину — её и показываем менеджеру. */
+  error?: unknown;
+  errorDescription?: string;
+  description?: string;
 }
 
 /** POST /v3/message — отправка текста через Wazzup. Возвращает messageId. */
