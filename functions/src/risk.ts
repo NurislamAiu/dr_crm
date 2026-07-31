@@ -31,6 +31,12 @@ const WORK_END = 23;
 
 const MASS_WINDOW_MS = 60 * 60_000;
 const MASS_LIMIT = 5; // один текст ≥5 разным номерам за час
+/**
+ * Короткие ответы («Да, конечно», «Ждём вас») менеджеры пишут десяткам людей
+ * в день — это обычная переписка, а не рассылка. Правило «одинаковый текст
+ * многим» применяем только к длинным сообщениям (шаблон/приглашение).
+ */
+const MASS_MIN_LEN = 30;
 const BURST_WINDOW_MS = 5 * 60_000;
 const BURST_LIMIT = 12; // >12 разных чатов за 5 минут
 const STATE_KEEP = 80; // сколько последних отправок держим в состоянии
@@ -128,7 +134,7 @@ export const dayKey = (d: Date) => localDayKey(d);
 export function paceFlags(recent: Recent[], hash: string, text: string, nowMs: number): RiskKind[] {
   const kinds: RiskKind[] = [];
   const same = new Set(recent.filter((r) => r.h === hash && nowMs - r.t < MASS_WINDOW_MS).map((r) => r.c));
-  if (text.trim().length > 0 && same.size >= MASS_LIMIT) kinds.push("mass");
+  if (text.trim().length >= MASS_MIN_LEN && same.size >= MASS_LIMIT) kinds.push("mass");
   const burst = new Set(recent.filter((r) => nowMs - r.t < BURST_WINDOW_MS).map((r) => r.c));
   if (burst.size > BURST_LIMIT) kinds.push("burst");
   return kinds;

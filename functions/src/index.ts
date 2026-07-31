@@ -1106,7 +1106,8 @@ export const riskBackfill = onRequest(
 
       if (!o.broadcast) {
         const same = new Set(list.filter((r) => r.h === hash).map((r) => r.c));
-        if (o.text.trim().length > 0 && same.size >= 5) kinds.push("mass");
+        // Как и в живой проверке: короткие ответы рассылкой не считаем.
+        if (o.text.trim().length >= 30 && same.size >= 5) kinds.push("mass");
         const burst = new Set(list.filter((r) => o.ms - r.t < 5 * 60_000).map((r) => r.c));
         if (burst.size > 12) kinds.push("burst");
       }

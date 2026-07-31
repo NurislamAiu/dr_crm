@@ -113,10 +113,13 @@ class FirebasePresenceService {
       onListen: () {
         sub = _col.where('online', isEqualTo: true).snapshots().listen(
           (s) {
+            if (ctrl.isClosed) return;
             last = s;
             ctrl.add(compute());
           },
-          onError: ctrl.addError,
+          onError: (Object e, StackTrace st) {
+            if (!ctrl.isClosed) ctrl.addError(e, st);
+          },
         );
         tick = Timer.periodic(const Duration(seconds: 30), (_) {
           if (last != null && !ctrl.isClosed) ctrl.add(compute());

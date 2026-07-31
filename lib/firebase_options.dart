@@ -57,18 +57,17 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBOk5iXMvE4W77XWtC_HQaoYxGrTKndme8',
-    appId: '1:832617788878:android:6339a64d46cf70243b679f',
+    appId: '1:832617788878:android:727f45ff46a400a03b679f',
     messagingSenderId: '832617788878',
     projectId: 'vip-client-manager',
     storageBucket: 'vip-client-manager.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyDjAMP1P2ylfz69OvTM2uvSYRhMvO60i9g',
-    appId: '1:832617788878:ios:cae0bc07aa74c92f3b679f',
+    appId: '1:832617788878:ios:23662f2e4f6017cf3b679f',
     messagingSenderId: '832617788878',
     projectId: 'vip-client-manager',
     storageBucket: 'vip-client-manager.firebasestorage.app',
-    iosBundleId: 'com.example.crm',
+    iosBundleId: 'kz.drtoitayev.crm',
   );
 }

@@ -1,0 +1,8 @@
+# Генерация иконок приложения: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icon_app.png"
+  ios: true
+  remove_alpha_ios: true
+  android: true
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon_fg.png"

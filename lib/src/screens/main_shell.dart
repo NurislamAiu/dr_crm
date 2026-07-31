@@ -80,6 +80,9 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     try {
       await ref.read(firebaseAuthServiceProvider).signOut();
     } catch (_) {}
+    // Сначала закрываем всё, что открыто поверх (настройки, чат, аналитика) —
+    // иначе экран входа окажется под ними.
+    appNavigatorKey.currentState?.popUntil((r) => r.isFirst);
     await cfg.logout();
 
     // Диалог показываем через корневой навигатор: MainShell к этому моменту

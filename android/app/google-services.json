@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "832617788878",
+    "project_id": "vip-client-manager",
+    "storage_bucket": "vip-client-manager.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:832617788878:android:6339a64d46cf70243b679f",
+        "android_client_info": {
+          "package_name": "com.example.crm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOk5iXMvE4W77XWtC_HQaoYxGrTKndme8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:832617788878:android:727f45ff46a400a03b679f",
+        "android_client_info": {
+          "package_name": "kz.drtoitayev.crm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOk5iXMvE4W77XWtC_HQaoYxGrTKndme8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:832617788878:android:70d86889929e86033b679f",
+        "android_client_info": {
+          "package_name": "kz.toitayev.com"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOk5iXMvE4W77XWtC_HQaoYxGrTKndme8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

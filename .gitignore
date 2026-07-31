@@ -46,3 +46,8 @@ app.*.map.json
 
 # JS/web artifacts accidentally created at repo root
 /node_modules/
+
+# Релизная подпись Android (не коммитить!)
+android/key.properties
+*.jks
+*.keystore

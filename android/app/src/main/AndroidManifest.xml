@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Пуш-уведомления (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
-        android:label="crm"
+        android:label="DR.TOITAYEV"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

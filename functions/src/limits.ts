@@ -140,11 +140,12 @@ export async function enqueue(item: OutboxItem): Promise<string> {
   const preview = item.kind === "media" ? `[${item.mediaType ?? "файл"}]` : (item.text ?? "");
   const name = (item.name ?? "").trim() || `+${item.chatId}`;
 
-  await firestore.collection("outbox").doc(item.crmMessageId).set({
-    ...item,
-    status: "pending",
-    createdAt: ts(),
-  });
+  // ВАЖНО: Firestore падает на undefined в значениях — пустые поля выкидываем.
+  const row: Record<string, unknown> = { status: "pending", attempts: 0, createdAt: ts() };
+  for (const [k, v] of Object.entries(item)) {
+    if (v !== undefined) row[k] = v;
+  }
+  await firestore.collection("outbox").doc(item.crmMessageId).set(row);
 
   await firestore.collection("messages").doc(item.crmMessageId).set(
     {
