@@ -25,8 +25,10 @@ service cloud.firestore {
     }
 
     // Профили менеджеров: читают менеджеры, пишет только сервер (Admin SDK).
+    // Свой профиль читает любой вошедший — иначе при пропавшем users/{uid}
+    // вход отваливается непонятным «permission-denied» вместо ясной причины.
     match /users/{uid} {
-      allow read: if isManager();
+      allow read: if isManager() || (signedIn() && request.auth.uid == uid);
       allow write: if false;
     }
 

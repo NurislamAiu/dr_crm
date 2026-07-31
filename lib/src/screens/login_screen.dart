@@ -41,7 +41,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final profile = await auth.loadProfile();
       if (profile == null) {
         await auth.signOut();
-        throw Exception('Профиль менеджера не найден (нет users/{uid})');
+        throw Exception('Профиль менеджера не найден. Попросите администратора '
+            'добавить вас заново в разделе «Менеджеры».');
       }
       if (!profile.isActive) {
         await auth.signOut();

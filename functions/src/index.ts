@@ -460,6 +460,87 @@ export const bootstrapAdmins = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, a
 });
 
 /** Создать менеджера (callable, только админ): Firebase Auth + users/{uid}. */
+/**
+ * Ремонт профилей менеджеров: показывает, у кого из пользователей Firebase Auth
+ * пропал документ users/{uid} (после случайного удаления в консоли), и по
+ * запросу восстанавливает его. Вход в приложение без такого документа
+ * невозможен — правила Firestore не пускают.
+ *
+ * Список:      GET /repairManagers?secret=<webhook secret>
+ * Восстановить: GET /repairManagers?secret=...&email=user2@gmail.com&name=Асель&role=manager
+ */
+export const repairManagers = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET] }, async (req, res) => {
+  if ((req.query.secret as string | undefined) !== WAZZUP_WEBHOOK_SECRET.value()) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  const firestore = db();
+  const email = String(req.query.email ?? "").trim().toLowerCase();
+
+  if (email) {
+    try {
+      const user = await admin.auth().getUserByEmail(email);
+      const name = String(req.query.name ?? "").trim() || (user.displayName ?? email.split("@")[0] ?? "Менеджер");
+      const role = String(req.query.role ?? "manager").trim() || "manager";
+      await firestore.collection("users").doc(user.uid).set(
+        { email, name, role, isActive: true, restoredAt: ts() },
+        { merge: true },
+      );
+      res.json({ ok: true, restored: { uid: user.uid, email, name, role } });
+    } catch (e) {
+      res.status(404).json({ ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+
+  // Отчёт: кто есть в Auth и у кого нет профиля + «осиротевшие» профили,
+  // у которых пользователь Auth удалён (их правка падает с INTERNAL).
+  const list = await admin.auth().listUsers(200);
+  const authUids = new Set(list.users.map((u) => u.uid));
+  const rows = await Promise.all(
+    list.users.map(async (u) => {
+      const doc = await firestore.collection("users").doc(u.uid).get();
+      const d = doc.data();
+      return {
+        uid: u.uid,
+        email: u.email ?? "",
+        hasProfile: doc.exists,
+        name: (d?.name as string) ?? "",
+        role: (d?.role as string) ?? "",
+        isActive: d?.isActive !== false,
+      };
+    }),
+  );
+
+  const profiles = await firestore.collection("users").get();
+  const orphans = profiles.docs
+    .filter((d) => !authUids.has(d.id))
+    .map((d) => ({ uid: d.id, email: (d.data().email as string) ?? "", name: (d.data().name as string) ?? "" }));
+
+  // ?cleanup=1 — пометить профили без пользователя Auth отключёнными.
+  // Не удаляем: на эти uid ссылается история сообщений и аналитика.
+  if (req.query.cleanup === "1" && orphans.length) {
+    const batch = firestore.batch();
+    for (const o of orphans) {
+      batch.set(
+        firestore.collection("users").doc(o.uid),
+        { isActive: false, authDeleted: true, updatedAt: ts() },
+        { merge: true },
+      );
+    }
+    await batch.commit();
+  }
+
+  res.json({
+    ok: true,
+    total: rows.length,
+    broken: rows.filter((r) => !r.hasProfile).length,
+    users: rows,
+    orphans,
+    cleaned: req.query.cleanup === "1" ? orphans.length : 0,
+  });
+});
+
 export const createManager = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Требуется вход");
@@ -498,7 +579,21 @@ export const updateManager = onCall(async (request) => {
   if (data.isActive !== undefined) authUpdate.disabled = !data.isActive;
   if (data.password && data.password.length >= 6) authUpdate.password = data.password;
   if (data.name !== undefined) authUpdate.displayName = data.name;
-  if (Object.keys(authUpdate).length > 0) await admin.auth().updateUser(uid, authUpdate);
+  if (Object.keys(authUpdate).length > 0) {
+    try {
+      await admin.auth().updateUser(uid, authUpdate);
+    } catch (e) {
+      // Пользователя удалили в консоли Firebase — раньше это падало как INTERNAL.
+      const code = (e as { code?: string }).code ?? "";
+      if (code.includes("user-not-found")) {
+        throw new HttpsError(
+          "not-found",
+          "Этот менеджер удалён из Firebase Auth. Удалите его в списке и создайте заново.",
+        );
+      }
+      throw new HttpsError("internal", String(e instanceof Error ? e.message : e));
+    }
+  }
 
   const docUpdate: Record<string, unknown> = { updatedAt: ts() };
   if (data.name !== undefined) docUpdate.name = data.name;
