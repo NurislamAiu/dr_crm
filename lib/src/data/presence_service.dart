@@ -87,17 +87,46 @@ class FirebasePresenceService {
   }
 
   /// Онлайн-менеджеры: online==true и lastSeen не старше 2 минут.
+  ///
+  /// Если приложение убили (или телефон уснул), документ остаётся online==true
+  /// с протухшим lastSeen. Одного snapshots() мало: без новых событий список
+  /// «зависает» и все выглядят в сети. Поэтому пересчитываем ещё и по таймеру.
   Stream<List<PresenceUser>> watch() {
-    return _col.where('online', isEqualTo: true).snapshots().map((s) {
+    late final StreamController<List<PresenceUser>> ctrl;
+    QuerySnapshot<Map<String, dynamic>>? last;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? sub;
+    Timer? tick;
+
+    List<PresenceUser> compute() {
       final now = DateTime.now();
       final out = <PresenceUser>[];
-      for (final d in s.docs) {
+      for (final d in last?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
         final data = d.data();
         final ls = (data['lastSeen'] as Timestamp?)?.toDate();
         if (ls == null || now.difference(ls).inSeconds > 120) continue;
         out.add(PresenceUser(d.id, (data['name'] ?? '') as String));
       }
       return out;
-    });
+    }
+
+    ctrl = StreamController<List<PresenceUser>>(
+      onListen: () {
+        sub = _col.where('online', isEqualTo: true).snapshots().listen(
+          (s) {
+            last = s;
+            ctrl.add(compute());
+          },
+          onError: ctrl.addError,
+        );
+        tick = Timer.periodic(const Duration(seconds: 30), (_) {
+          if (last != null && !ctrl.isClosed) ctrl.add(compute());
+        });
+      },
+      onCancel: () async {
+        tick?.cancel();
+        await sub?.cancel();
+      },
+    );
+    return ctrl.stream;
   }
 }

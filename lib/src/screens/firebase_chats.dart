@@ -128,7 +128,18 @@ class _FirebaseConversationsScreenState extends ConsumerState<FirebaseConversati
           header,
           ...conv.when(
             loading: () => [const SliverFillRemaining(hasScrollBody: false, child: Center(child: CircularProgressIndicator()))],
-            error: (e, _) => [SliverFillRemaining(hasScrollBody: false, child: _msg(Iconsax.cloud_cross, 'Ошибка', '$e'))],
+            // Переподключение идёт само 30 секунд; если не помогло — кнопка.
+            error: (e, _) => [
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _msg(
+                  Iconsax.cloud_cross,
+                  'Нет связи с сервером',
+                  'Не удалось подключиться за 30 секунд.\nПроверьте интернет и попробуйте снова.',
+                  onRetry: () => ref.invalidate(firebaseConversationsProvider),
+                ),
+              ),
+            ],
             data: (items) {
               // Поиск: по имени, номеру (цифрам) и тексту последнего сообщения.
               final q = _query.trim().toLowerCase();
@@ -508,7 +519,7 @@ class _FirebaseConversationsScreenState extends ConsumerState<FirebaseConversati
     );
   }
 
-  Widget _msg(IconData i, String t, String s) => Center(
+  Widget _msg(IconData i, String t, String s, {VoidCallback? onRetry}) => Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -522,6 +533,24 @@ class _FirebaseConversationsScreenState extends ConsumerState<FirebaseConversati
             Text(t, style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w700, color: kInk)),
             const SizedBox(height: 6),
             Text(s, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: kSub)),
+            if (onRetry != null) ...[
+              const SizedBox(height: 18),
+              SizedBox(
+                width: 190,
+                height: 46,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kTealDeep,
+                    minimumSize: const Size(190, 46),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  ),
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Подключиться заново',
+                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  onPressed: onRetry,
+                ),
+              ),
+            ],
           ]),
         ),
       );

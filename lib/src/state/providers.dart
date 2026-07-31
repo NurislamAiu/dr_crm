@@ -17,6 +17,7 @@ import '../data/push_service.dart';
 import '../data/quick_replies_service.dart';
 import '../data/risk_service.dart';
 import '../data/session_service.dart';
+import '../data/stream_retry.dart';
 import '../data/vip_repository.dart';
 import '../models/models.dart';
 
@@ -43,13 +44,13 @@ bool _isToday(DateTime? d) {
 }
 
 /// Кэшированный список лидов (одна подписка на приложение).
-final leadsListProvider = StreamProvider((ref) => ref.watch(leadRepositoryProvider).watchAll());
+final leadsListProvider = StreamProvider((ref) => resilient(() => ref.watch(leadRepositoryProvider).watchAll()));
 
 /// Кэшированный список VIP-клиентов (одна подписка на приложение).
-final vipClientsListProvider = StreamProvider((ref) => ref.watch(vipRepositoryProvider).watchAll());
+final vipClientsListProvider = StreamProvider((ref) => resilient(() => ref.watch(vipRepositoryProvider).watchAll()));
 
 /// Кэшированный список записей на массаж (одна подписка на приложение).
-final massagesListProvider = StreamProvider((ref) => ref.watch(massageRepositoryProvider).watchAll());
+final massagesListProvider = StreamProvider((ref) => resilient(() => ref.watch(massageRepositoryProvider).watchAll()));
 
 /// Телефоны (только цифры) активных записей на массаж — для пометки чатов.
 final massagePhonesProvider = Provider<Set<String>>((ref) {
@@ -58,10 +59,12 @@ final massagePhonesProvider = Provider<Set<String>>((ref) {
 });
 
 /// Кэшированный presence (одна подписка вместо новой на каждый rebuild).
-final presenceUsersProvider = StreamProvider((ref) => ref.watch(firebasePresenceServiceProvider).watch());
+final presenceUsersProvider =
+    StreamProvider((ref) => resilient(() => ref.watch(firebasePresenceServiceProvider).watch()));
 
 /// Кэшированный список менеджеров users/ (одна подписка).
-final managersProvider = StreamProvider((ref) => ref.watch(firebaseManagerServiceProvider).watchManagers());
+final managersProvider =
+    StreamProvider((ref) => resilient(() => ref.watch(firebaseManagerServiceProvider).watchManagers()));
 
 /// Пуш-уведомления (FCM).
 final pushServiceProvider = Provider<PushService>((_) => PushService());
@@ -152,12 +155,12 @@ final firestoreChatRepositoryProvider = Provider<FirestoreChatRepository>((_) =>
 
 /// Кэшированный стрим диалогов (одна подписка на всё приложение — без дублей чтений).
 final firebaseConversationsProvider = StreamProvider<List<FsConversation>>((ref) {
-  return ref.watch(firestoreChatRepositoryProvider).watchConversations();
+  return resilient(() => ref.watch(firestoreChatRepositoryProvider).watchConversations());
 });
 
 /// Кэшированный стрим сообщений одного диалога (одна подписка на диалог).
 final firebaseMessagesProvider = StreamProvider.autoDispose.family<List<FsMessage>, String>((ref, conversationId) {
-  return ref.watch(firestoreChatRepositoryProvider).watchMessages(conversationId);
+  return resilient(() => ref.watch(firestoreChatRepositoryProvider).watchMessages(conversationId));
 });
 
 /// Присутствие менеджеров через Firestore (firebase-режим).

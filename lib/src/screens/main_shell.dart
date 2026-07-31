@@ -11,6 +11,7 @@ import 'conversations_screen.dart';
 import 'firebase_chats.dart';
 import 'leads_screen.dart';
 import 'massage_screen.dart';
+import 'session_wait_screen.dart';
 import 'settings_screen.dart';
 import 'soft_ui.dart';
 import 'vip_clients_screen.dart';
@@ -46,10 +47,31 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     super.dispose();
   }
 
-  /// Нас вытеснил другой менеджер — выходим и показываем окно.
+  /// Нас вытеснил другой менеджер. Сначала — зона ожидания на 30 секунд:
+  /// если система освободится, работаем дальше без повторного входа.
   Future<void> _kickOut(String byName) async {
     if (_kicked || !mounted) return;
     _kicked = true;
+
+    final nav = appNavigatorKey.currentState;
+    if (nav != null && nav.mounted) {
+      final freed = await nav.push<bool>(
+        MaterialPageRoute(builder: (_) => SessionWaitScreen(byName: byName), fullscreenDialog: true),
+      );
+      if (freed == true && mounted) {
+        // Освободилась — снова занимаем систему за собой.
+        final cfg = ref.read(appConfigProvider);
+        _kicked = false;
+        if (cfg.userId != null) {
+          _session ??= ref.read(sessionServiceProvider);
+          try {
+            await _session!.claim(uid: cfg.userId!, name: cfg.userName ?? '');
+          } catch (_) {}
+        }
+        return;
+      }
+    }
+
     final cfg = ref.read(appConfigProvider);
     if (_presenceOn) {
       _presence?.stop();
@@ -62,10 +84,10 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
 
     // Диалог показываем через корневой навигатор: MainShell к этому моменту
     // уже заменён экраном входа.
-    final nav = appNavigatorKey.currentState;
-    if (nav == null || !nav.mounted) return;
+    final root = appNavigatorKey.currentState;
+    if (root == null || !root.mounted) return;
     await showDialog<void>(
-      context: nav.context,
+      context: root.context,
       barrierDismissible: false,
       builder: (d) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
