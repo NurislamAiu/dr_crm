@@ -101,6 +101,13 @@ class FsMessage {
   /// Сообщение ушло рассылкой.
   final bool isBroadcast;
 
+  /// Почему сообщение придержано: hour/day — лимит темпа, mass — одинаковый
+  /// текст многим, window — WABA ждёт ответа клиента (24-часовое окно).
+  String? queueReason;
+
+  /// Текст ошибки от Wazzup (для status == error).
+  String? statusError;
+
   bool get isOutbound => direction == 'outbound';
   String? get media => mediaUrl ?? contentUri;
 
@@ -122,7 +129,9 @@ class FsMessage {
       authorName: d['authorName'] as String?,
       callResult: d['callResult'] as String?,
       isBroadcast: d['isBroadcast'] == true,
-    );
+    )
+      ..queueReason = d['queueReason'] as String?
+      ..statusError = d['statusError'] as String?;
   }
 }
 

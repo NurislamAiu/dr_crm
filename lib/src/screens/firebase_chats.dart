@@ -1454,12 +1454,21 @@ class _FirebaseChatScreenState extends ConsumerState<FirebaseChatScreen> {
                 Text(time, style: TextStyle(fontSize: 10.5, color: metaColor)),
                 if (out && !deleted) ...[
                   const SizedBox(width: 3),
-                  // «queued» — придержано лимитом темпа, уйдёт в ближайшие минуты.
+                  // «queued» — придержано лимитом темпа или ждёт ответа клиента
+                  // (WABA: вне 24 часов свободный текст WhatsApp не пропустит).
                   if (m.status == 'queued')
                     Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.schedule_rounded, size: 12, color: metaColor),
                       const SizedBox(width: 3),
-                      Text('в очереди', style: TextStyle(fontSize: 10, color: metaColor)),
+                      Text(m.queueReason == 'window' ? 'ждёт ответа клиента' : 'в очереди',
+                          style: TextStyle(fontSize: 10, color: metaColor)),
+                    ])
+                  else if (m.status == 'error' || m.status == 'expired')
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.error_outline_rounded, size: 12, color: Color(0xFFFFC9C6)),
+                      const SizedBox(width: 3),
+                      Text(m.status == 'expired' ? 'не отправлено' : 'не доставлено',
+                          style: const TextStyle(fontSize: 10, color: Color(0xFFFFC9C6))),
                     ])
                   else
                     Icon(

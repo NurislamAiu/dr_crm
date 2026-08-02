@@ -37,11 +37,27 @@ export interface WazzupStatus {
   description?: string;
 }
 
-/** POST /v3/message — отправка текста через Wazzup. Возвращает messageId. */
+/**
+ * POST /v3/message — отправка текста через Wazzup. Возвращает messageId.
+ *
+ * Тот же роут обслуживает и обычный WhatsApp (QR), и WABA — отличие лишь в
+ * канале. Для WABA вне 24-часового окна вместо text передаётся одобренный
+ * Meta шаблон: templateId + значения переменных.
+ */
 export async function wazzupSendText(
   apiKey: string,
-  input: { channelId: string; chatId: string; chatType: string; text: string; crmMessageId: string; refMessageId?: string },
+  input: {
+    channelId: string;
+    chatId: string;
+    chatType: string;
+    text: string;
+    crmMessageId: string;
+    refMessageId?: string;
+    templateId?: string;
+    templateValues?: string[];
+  },
 ): Promise<{ messageId?: string }> {
+  const template = (input.templateId ?? "").trim();
   const res = await fetch("https://api.wazzup24.com/v3/message", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
@@ -49,7 +65,10 @@ export async function wazzupSendText(
       channelId: input.channelId,
       chatId: input.chatId,
       chatType: input.chatType,
-      text: input.text,
+      // text и templateId одновременно передавать нельзя.
+      ...(template
+        ? { templateId: template, templateValues: input.templateValues ?? [] }
+        : { text: input.text }),
       crmMessageId: input.crmMessageId,
       ...(input.refMessageId ? { refMessageId: input.refMessageId } : {}),
       clearUnanswered: true,
@@ -58,6 +77,62 @@ export async function wazzupSendText(
   const data = (await res.json().catch(() => ({}))) as { messageId?: string; error?: unknown };
   if (!res.ok) throw new Error(`Wazzup ${res.status}: ${JSON.stringify(data)}`);
   return { messageId: data.messageId };
+}
+
+/** Канал Wazzup: transport «whatsapp» — QR, «wapi» — WABA. */
+export type WazzupChannel = { channelId: string; transport: string; plainId: string; state: string };
+
+/** GET /v3/channels — список каналов аккаунта. */
+export async function wazzupChannels(apiKey: string): Promise<WazzupChannel[]> {
+  const res = await fetch("https://api.wazzup24.com/v3/channels", {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Wazzup channels ${res.status}: ${await res.text()}`);
+  const body = (await res.json()) as unknown;
+  const list = (Array.isArray(body) ? body : ((body as { data?: unknown[] }).data ?? [])) as Record<string, unknown>[];
+  return list.map((c) => ({
+    channelId: String(c.channelId ?? ""),
+    transport: String(c.transport ?? ""),
+    plainId: String(c.plainId ?? c.name ?? ""),
+    state: String(c.state ?? "unknown"),
+  }));
+}
+
+/** Компонент шаблона WABA (HEADER / BODY / FOOTER / BUTTONS). */
+export type WabaComponent = { type?: string; format?: string; text?: string; buttons?: unknown[] };
+
+/** Шаблон WABA из личного кабинета Wazzup. */
+export type WabaTemplate = {
+  templateGuid: string;
+  title: string;
+  name: string;
+  category: string;
+  language: string;
+  status: string;
+  channels: string[];
+  components: WabaComponent[];
+  templateCode?: string;
+};
+
+/** GET /v3/templates/whatsapp — шаблоны WABA, одобренные Meta. */
+export async function wazzupTemplates(apiKey: string, limit = 100, offset = 0): Promise<WabaTemplate[]> {
+  const res = await fetch(`https://api.wazzup24.com/v3/templates/whatsapp?limit=${limit}&offset=${offset}`, {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Wazzup templates ${res.status}: ${await res.text()}`);
+  const body = (await res.json()) as unknown;
+  const list = (Array.isArray(body) ? body : ((body as { data?: unknown[] }).data ?? [])) as Record<string, unknown>[];
+  return list.map((t) => ({
+    templateGuid: String(t.templateGuid ?? ""),
+    title: String(t.title ?? ""),
+    name: String(t.name ?? ""),
+    category: String(t.category ?? ""),
+    language: String(t.language ?? ""),
+    status: String(t.status ?? ""),
+    channels: ((t.channels ?? []) as unknown[]).map(String),
+    components: ((t.components ?? []) as WabaComponent[]) ?? [],
+    templateCode: t.templateCode ? String(t.templateCode) : undefined,
+  }));
 }
 
 /** PATCH /v3/message/:id — редактирование текста. */

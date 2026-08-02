@@ -19,6 +19,7 @@ import '../data/risk_service.dart';
 import '../data/session_service.dart';
 import '../data/stream_retry.dart';
 import '../data/vip_repository.dart';
+import '../data/waba_service.dart';
 import '../models/models.dart';
 
 /// Переопределяется в main() после загрузки настроек.
@@ -121,6 +122,13 @@ final sendLimitsProvider =
 /// Сколько сообщений ждёт в очереди отправки.
 final queueSizeProvider =
     StreamProvider.autoDispose<int>((ref) => ref.watch(riskServiceProvider).watchQueueSize());
+
+/// Канал Wazzup и шаблоны WABA (только админ).
+final wabaServiceProvider = Provider<WabaService>((_) => WabaService());
+
+/// Настройки WABA (какой шаблон зовёт клиента в чат).
+final wabaSettingsProvider =
+    StreamProvider<WabaSettings>((ref) => ref.watch(wabaServiceProvider).watchSettings());
 
 /// Серверная рассылка.
 final broadcastRepositoryProvider = Provider<BroadcastRepository>((_) => BroadcastRepository());

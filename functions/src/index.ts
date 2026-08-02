@@ -5,9 +5,20 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import { randomUUID, createHmac } from "crypto";
-import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, wazzupEditText, wazzupDeleteMessage, type WazzupMessage, type WazzupStatus } from "./wazzup";
+import { normalizeChatId, parseDateMs, wazzupSendText, wazzupSendMedia, wazzupEditText, wazzupDeleteMessage, wazzupChannels, wazzupTemplates, type WazzupMessage, type WazzupStatus } from "./wazzup";
 import { auditOutbound, dayKey, fingerprint, hasLink, isNight, loadAllowedPhones, logRisk, peekChat, textFlags, type RiskKind } from "./risk";
 import { enqueue, gateSend, limits, reserveSlot } from "./limits";
+import {
+  currentChannel,
+  isWaba,
+  markOpenerSent,
+  openerRecentlySent,
+  resetChannelCache,
+  resetWabaCache,
+  templateValues,
+  wabaSettings,
+  windowOpen,
+} from "./waba";
 
 admin.initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
@@ -143,6 +154,8 @@ export const wazzupWebhook = onRequest({ secrets: [WAZZUP_WEBHOOK_SECRET, WAZZUP
         // Клиент нам писал — значит контакт «тёплый» (контроль подозрительной
         // активности не считает такие чаты холодной рассылкой).
         conv.hasInbound = true;
+        // Отсчёт 24-часового окна WABA: внутри него можно писать свободно.
+        conv.lastInboundAt = createdAt;
       }
       batch.set(firestore.collection("conversations").doc(chatId), conv, { merge: true });
 
@@ -686,6 +699,97 @@ export const createManager = onCall(async (request) => {
   return { ok: true, uid: user.uid };
 });
 
+/** Проверка «звонящий — админ» для callable-функций. */
+async function assertAdmin(uid: string | undefined): Promise<void> {
+  if (!uid) throw new HttpsError("unauthenticated", "Требуется вход");
+  const caller = await db().collection("users").doc(uid).get();
+  const role = caller.data()?.role;
+  if (role !== "admin" && role !== "administrator") throw new HttpsError("permission-denied", "Только админ");
+}
+
+/**
+ * Каналы аккаунта Wazzup (callable, админ): показать, что подключено —
+ * QR-канал или WABA, и в каком состоянии. Нужен экрану настроек канала.
+ */
+export const wazzupChannelList = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID] }, async (request) => {
+  await assertAdmin(request.auth?.uid);
+  try {
+    const list = await wazzupChannels(WAZZUP_API_KEY.value());
+    const active = await currentChannel(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value());
+    return {
+      ok: true,
+      current: active.channelId,
+      channels: list.map((c) => ({
+        channelId: c.channelId,
+        phone: c.plainId,
+        transport: c.transport,
+        isWaba: isWaba(c.transport),
+        state: c.state,
+      })),
+    };
+  } catch (e) {
+    throw new HttpsError("unavailable", String(e instanceof Error ? e.message : e));
+  }
+});
+
+/**
+ * Шаблоны WABA из кабинета Wazzup (callable, админ). Показываем в приложении,
+ * чтобы админ выбрал шаблон приглашения и шаблон для рассылки.
+ */
+export const wabaTemplates = onCall({ secrets: [WAZZUP_API_KEY] }, async (request) => {
+  await assertAdmin(request.auth?.uid);
+  try {
+    const list = await wazzupTemplates(WAZZUP_API_KEY.value());
+    return {
+      ok: true,
+      templates: list.map((t) => {
+        const body = t.components.find((c) => c.type === "BODY");
+        const header = t.components.find((c) => c.type === "HEADER");
+        // Сколько переменных ждёт шаблон — по числу {{n}} в заголовке и теле.
+        const vars = [header?.text ?? "", body?.text ?? ""].join(" ").match(/\{\{\d+\}\}/g)?.length ?? 0;
+        return {
+          id: t.templateGuid,
+          title: t.title || t.name,
+          status: t.status,
+          category: t.category,
+          language: t.language,
+          body: (body?.text ?? "").slice(0, 400),
+          header: (header?.text ?? "").slice(0, 200),
+          vars,
+        };
+      }),
+    };
+  } catch (e) {
+    throw new HttpsError("unavailable", String(e instanceof Error ? e.message : e));
+  }
+});
+
+/**
+ * Переключить рабочий канал и настроить WABA (callable, админ).
+ * Пишет config/channel и config/waba, сбрасывает кэши — передеплой не нужен.
+ */
+export const setChannelConfig = onCall(async (request) => {
+  await assertAdmin(request.auth?.uid);
+  const d = (request.data ?? {}) as {
+    channelId?: string;
+    openerTemplateId?: string;
+    openerVars?: string[];
+    openerCooldownHours?: number;
+  };
+  if (d.channelId !== undefined) {
+    await db().doc("config/channel").set({ channelId: String(d.channelId).trim(), updatedAt: ts() }, { merge: true });
+  }
+  const waba: Record<string, unknown> = {};
+  if (d.openerTemplateId !== undefined) waba.openerTemplateId = String(d.openerTemplateId).trim();
+  if (Array.isArray(d.openerVars)) waba.openerVars = d.openerVars.map(String);
+  if (typeof d.openerCooldownHours === "number") waba.openerCooldownHours = d.openerCooldownHours;
+  if (Object.keys(waba).length) await db().doc("config/waba").set({ ...waba, updatedAt: ts() }, { merge: true });
+
+  resetChannelCache();
+  resetWabaCache();
+  return { ok: true };
+});
+
 /** Изменить менеджера (callable, только админ): имя/роль/активность/сброс пароля. */
 export const updateManager = onCall(async (request) => {
   const callerUid = request.auth?.uid;
@@ -739,7 +843,18 @@ export const updateManager = onCall(async (request) => {
 async function sendOutboundText(
   apiKey: string,
   channelId: string,
-  p: { phone: string; text: string; name?: string; authorId: string; refMessageId?: string; replyToText?: string; isBroadcast?: boolean },
+  p: {
+    phone: string;
+    text: string;
+    name?: string;
+    authorId: string;
+    refMessageId?: string;
+    replyToText?: string;
+    isBroadcast?: boolean;
+    /** WABA: отправить одобренный Meta шаблон вместо свободного текста. */
+    templateId?: string;
+    templateValues?: string[];
+  },
 ): Promise<{ messageId: string; queued: boolean }> {
   const chatId = normalizeChatId("whatsapp", p.phone);
   const text = p.text.trim();
@@ -749,6 +864,44 @@ async function sendOutboundText(
   const pre = p.isBroadcast ? null : await peekChat(chatId);
 
   const crmMessageId = randomUUID();
+
+  // Какой канал работает сейчас: QR или WABA (и его id может быть переопределён
+  // в config/channel — чтобы переключиться без передеплоя).
+  const ch = await currentChannel(apiKey, channelId);
+  const sendChannelId = ch.channelId || channelId;
+
+  // WABA: вне 24-часового окна свободный текст не уйдёт — только шаблон.
+  // Текст менеджера не теряем: он ждёт в очереди ответа клиента, а клиенту
+  // уходит приглашение шаблоном (не чаще, чем раз в openerCooldownHours).
+  if (isWaba(ch.transport) && !p.templateId && !(await windowOpen(chatId))) {
+    const st = await wabaSettings();
+    if (!st.openerTemplateId) {
+      throw new Error(
+        "WABA: клиент не писал больше 24 часов — нужен шаблон. Выберите шаблон приглашения в настройках WABA.",
+      );
+    }
+    await enqueue({
+      kind: "text",
+      chatId,
+      text,
+      name: p.name,
+      authorId: p.authorId,
+      refMessageId: p.refMessageId,
+      replyToText: p.replyToText,
+      crmMessageId,
+      reason: "window",
+      waitWindow: true,
+    });
+    if (!(await openerRecentlySent(chatId, st.openerCooldownHours))) {
+      await sendOutboundText(apiKey, channelId, {
+        ...p,
+        templateId: st.openerTemplateId,
+        templateValues: templateValues(st.openerVars, { name: p.name, text }),
+      });
+      await markOpenerSent(chatId);
+    }
+    return { messageId: crmMessageId, queued: true };
+  }
 
   // Лимит темпа: сверх нормы (или «один текст многим») — в очередь.
   const gate = await gateSend({ authorId: p.authorId, chatId, text, broadcast: p.isBroadcast });
@@ -773,12 +926,14 @@ async function sendOutboundText(
   }
 
   const result = await wazzupSendText(apiKey, {
-    channelId,
+    channelId: sendChannelId,
     chatId,
     chatType: "whatsapp",
     text,
     crmMessageId,
     refMessageId: p.refMessageId,
+    templateId: p.templateId,
+    templateValues: p.templateValues,
   });
   const messageId = String(result.messageId ?? crmMessageId);
   const name = (p.name ?? "").trim() || `+${chatId}`;
@@ -968,6 +1123,20 @@ export const processBroadcasts = onSchedule(
       const tpl = variants[vIdx] ?? variants[0] ?? "";
       if (!row) return;
       const text = tpl.replaceAll("{name}", row.name).replaceAll("{date}", row.date);
+
+      // WABA: рассылка возможна только одобренным шаблоном Meta.
+      const bCh = await currentChannel(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value());
+      const wabaTemplateId = String(b.templateId ?? "").trim();
+      if (isWaba(bCh.transport) && !wabaTemplateId) {
+        await ref.update({
+          status: "error",
+          error: "Канал WABA: рассылка возможна только шаблоном. Выберите шаблон при создании рассылки.",
+          updatedAt: ts(),
+        });
+        return;
+      }
+      const bVars = ((b.templateVars ?? ["name", "date"]) as unknown[]).map(String);
+
       try {
         await sendOutboundText(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value(), {
           phone: row.phone,
@@ -975,6 +1144,12 @@ export const processBroadcasts = onSchedule(
           name: row.name,
           authorId: String(b.createdBy ?? "broadcast"),
           isBroadcast: true,
+          ...(wabaTemplateId
+            ? {
+                templateId: wabaTemplateId,
+                templateValues: templateValues(bVars, { name: row.name, date: row.date, text }),
+              }
+            : {}),
         });
         rows[idx] = { ...row, status: "sent", variant: vIdx + 1 };
       } catch (e) {
@@ -1011,6 +1186,8 @@ export const processOutbox = onSchedule(
   async () => {
     const firestore = db();
     const lim = await limits();
+    // Канал берём один раз: он мог быть переключён на WABA из приложения.
+    const outCh = await currentChannel(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value());
     const snap = await firestore
       .collection("outbox")
       .where("status", "==", "pending")
@@ -1022,19 +1199,34 @@ export const processOutbox = onSchedule(
     const startedAt = Date.now();
     for (const doc of snap.docs) {
       if (Date.now() - startedAt > 85_000) return;
-      const slot = await reserveSlot();
-      if (!slot.allow) return; // лимит исчерпан — продолжим через минуту
 
       const it = doc.data() as Record<string, unknown>;
       const chatId = String(it.chatId ?? "");
       const crmMessageId = String(it.crmMessageId ?? doc.id);
+
+      // WABA: текст ждёт ответа клиента. Пока окно закрыто — пропускаем,
+      // а через 3 суток снимаем с отправки, чтобы не висело вечно.
+      if (it.waitWindow === true && !(await windowOpen(chatId))) {
+        const created = (it.createdAt as admin.firestore.Timestamp | undefined)?.toMillis() ?? Date.now();
+        if (Date.now() - created > 3 * 86400_000) {
+          await doc.ref.set({ status: "expired" }, { merge: true });
+          await firestore.collection("messages").doc(crmMessageId).set(
+            { status: "expired", queued: false, statusError: "Клиент не ответил за 3 дня — сообщение не отправлено" },
+            { merge: true },
+          );
+        }
+        continue;
+      }
+
+      const slot = await reserveSlot();
+      if (!slot.allow) return; // лимит исчерпан — продолжим через минуту
       try {
         let messageId = crmMessageId;
         if (it.kind === "media") {
           const mediaPath = String(it.mediaPath ?? "");
           const tok = mediaToken(mediaPath, WAZZUP_WEBHOOK_SECRET.value());
           const res = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
-            channelId: WAZZUP_CHANNEL_ID.value(),
+            channelId: outCh.channelId || WAZZUP_CHANNEL_ID.value(),
             chatId,
             chatType: "whatsapp",
             contentUri: `${REGION_HOST}/mediaContent?path=${mediaPath}&t=${tok}`,
@@ -1043,7 +1235,7 @@ export const processOutbox = onSchedule(
           messageId = String(res.messageId ?? crmMessageId);
         } else {
           const res = await wazzupSendText(WAZZUP_API_KEY.value(), {
-            channelId: WAZZUP_CHANNEL_ID.value(),
+            channelId: outCh.channelId || WAZZUP_CHANNEL_ID.value(),
             chatId,
             chatType: "whatsapp",
             text: String(it.text ?? ""),
@@ -1102,6 +1294,38 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
   const pre = await peekChat(chatId);
   const crmMessageId = randomUUID();
 
+  const mediaCh = await currentChannel(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value());
+
+  // WABA: файл вне 24-часового окна не уйдёт — ждём ответа клиента, а его
+  // самого зовём в чат шаблоном (как и для текста).
+  if (isWaba(mediaCh.transport) && !(await windowOpen(chatId))) {
+    const st = await wabaSettings();
+    await enqueue({
+      kind: "media",
+      chatId,
+      name: data.name,
+      authorId: request.auth.uid,
+      mediaPath,
+      mediaUrl,
+      mediaType: type,
+      crmMessageId,
+      reason: "window",
+      waitWindow: true,
+    });
+    if (st.openerTemplateId && !(await openerRecentlySent(chatId, st.openerCooldownHours))) {
+      await sendOutboundText(WAZZUP_API_KEY.value(), WAZZUP_CHANNEL_ID.value(), {
+        phone: chatId,
+        text: `[${type}]`,
+        name: data.name,
+        authorId: request.auth.uid,
+        templateId: st.openerTemplateId,
+        templateValues: templateValues(st.openerVars, { name: data.name }),
+      });
+      await markOpenerSent(chatId);
+    }
+    return { ok: true, messageId: crmMessageId, queued: true };
+  }
+
   // Тот же лимит темпа, что и для текста (правило «одинаковый текст» к медиа
   // не применяем — это разные файлы).
   const gate = await gateSend({ authorId: request.auth.uid, chatId, text: `[${type}]`, skipMass: true });
@@ -1121,7 +1345,7 @@ export const sendMedia = onCall({ secrets: [WAZZUP_API_KEY, WAZZUP_CHANNEL_ID, W
   }
 
   const result = await wazzupSendMedia(WAZZUP_API_KEY.value(), {
-    channelId: WAZZUP_CHANNEL_ID.value(),
+    channelId: mediaCh.channelId || WAZZUP_CHANNEL_ID.value(),
     chatId,
     chatType: "whatsapp",
     contentUri,

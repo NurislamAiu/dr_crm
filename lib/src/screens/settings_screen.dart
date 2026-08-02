@@ -9,6 +9,7 @@ import 'quick_replies_screen.dart';
 import 'firebase_managers_screen.dart';
 import 'managers_screen.dart';
 import 'soft_ui.dart';
+import 'waba_screen.dart';
 
 const _pageBg = Color(0xFFF1F8F6);
 
@@ -108,6 +109,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         MaterialPageRoute(
                           builder: (_) => config.isFirebase ? const FirebaseManagersScreen() : const ManagersScreen(),
                         ),
+                      ),
+                    ),
+                  if (_isAdmin && config.isFirebase)
+                    _navCard(
+                      icon: Iconsax.verify,
+                      color: const Color(0xFF1B5BC4),
+                      title: 'Канал WhatsApp',
+                      subtitle: 'Обычный номер или WABA, шаблоны сообщений',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const WabaScreen()),
                       ),
                     ),
                   if (_isAdmin && config.isFirebase)

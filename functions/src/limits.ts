@@ -129,6 +129,8 @@ export type OutboxItem = {
   mediaType?: string;
   crmMessageId: string;
   reason?: string;
+  /** WABA: ждём, пока клиент ответит — до этого свободный текст не уйдёт. */
+  waitWindow?: boolean;
 };
 
 /**

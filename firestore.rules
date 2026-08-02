@@ -63,13 +63,22 @@ service cloud.firestore {
     // Настройки (автоответчик и т.п.) — только менеджеры.
     // config/risk (белый список номеров) правит только админ — иначе менеджер
     // мог бы сам себя вывести из-под контроля.
+    // Канал (QR/WABA) и шаблоны WABA правит только админ — через функции.
     match /config/risk {
       allow read: if isManager();
       allow write: if isAdmin();
     }
+    match /config/channel {
+      allow read: if isManager();
+      allow write: if false;
+    }
+    match /config/waba {
+      allow read: if isManager();
+      allow write: if false;
+    }
     match /config/{id} {
       allow read: if isManager();
-      allow write: if isManager() && id != 'risk';
+      allow write: if isManager() && !(id in ['risk', 'channel', 'waba']);
     }
 
     // Присутствие: читают менеджеры, пишет только сам о себе.
