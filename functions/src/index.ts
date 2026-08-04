@@ -629,6 +629,21 @@ export const opsStatus = onRequest(
       channel = { state: "error", error: String(e instanceof Error ? e.message : e) };
     }
 
+    // 1б. Шаблоны WABA: без одобренного шаблона писать первым нельзя.
+    let templates: unknown = [];
+    try {
+      const list = await wazzupTemplates(WAZZUP_API_KEY.value());
+      templates = list.map((t) => ({
+        id: t.templateGuid,
+        title: t.title || t.name,
+        status: t.status,
+        category: t.category,
+        body: (t.components.find((c) => c.type === "BODY")?.text ?? "").slice(0, 200),
+      }));
+    } catch (e) {
+      templates = { error: String(e instanceof Error ? e.message : e).slice(0, 200) };
+    }
+
     // 2. Лимит темпа и счётчики канала.
     const lim = await limits();
     const chDoc = (await firestore.doc("riskState/_channel").get()).data() ?? {};
@@ -648,6 +663,7 @@ export const opsStatus = onRequest(
     res.json({
       ok: true,
       channel,
+      templates,
       limits: lim,
       counters: { hour, day: chDoc.day ?? null, dayCount: chDoc.dayCount ?? 0 },
       lastOutbound: outs.docs.map((d) => {
