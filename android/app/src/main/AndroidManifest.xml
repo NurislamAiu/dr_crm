@@ -32,6 +32,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Рендер Skia вместо Impeller: на части Samsung (Xclipse GPU, напр.
+             Galaxy A56) Impeller даёт мерцание/дёргание экрана и фризы.
+             Skia — прежний проверенный движок, визуально ничего не меняет. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
@@ -42,6 +48,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Кнопка «Позвонить» открывает звонилку через tel:-ссылку. Без этого
+             объявления Android 11+ скрывает звонилку от приложения (package
+             visibility) — launchUrl() тихо возвращает false, звонок не запускается. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
         </intent>
     </queries>
 </manifest>

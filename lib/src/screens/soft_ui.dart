@@ -1,17 +1,24 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../design/components/press_scale.dart';
 
 /// Общие элементы «мягкого» UI для экранов Лиды / VIP:
 /// шапка со скруглением, аватар с делением по стране (флаг), недельная лента,
 /// стат-карточки. Иконки — Iconsax.
 
-const kTeal = Color(0xFF12B0A1);
-const kTealDeep = Color(0xFF0C8577);
-const kInk = Color(0xFF10332C);
-// Вторичный текст: ≥4.5:1 на белом (WCAG), тёплый тил-серый.
-const kSub = Color(0xFF5C736C);
-const kAmber = Color(0xFFEF9F27);
-const kAmberDeep = Color(0xFF8F5C06);
+// Наследие «мягкого» UI. Значения переведены на палитру дизайн-системы
+// (lib/src/design/tokens.dart), чтобы ещё не перенесённые экраны выглядели
+// заодно с новой темой. Это константы, поэтому смену скина они не
+// подхватывают — при переносе экрана заменяйте их на context.tokens.
+const kTeal = Color(0xFF0A84FF); // accentStart
+const kTealDeep = Color(0xFF5E5CE6); // accentEnd
+const kInk = Color(0xFF000000); // textPrimary
+const kSub = Color(0x9E3C3C43); // textSecondary, #3C3C43 @ 62%
+const kAmber = Color(0xFFFF9500); // warning
+const kAmberDeep = Color(0xFFC26A00);
 
 /// Казахстан = номер после +7 начинается с 7 (цифры «77…»); иначе — Россия.
 bool phoneIsKz(String? phone) =>
@@ -93,7 +100,7 @@ class CountryAvatar extends StatelessWidget {
         // Тонкая обводка: у флага РФ верхняя полоса белая — без неё сливается с карточкой.
         border: Border.all(color: Colors.black.withValues(alpha: 0.07)),
         image: DecorationImage(image: AssetImage(flagFor(phone)), fit: BoxFit.cover),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 3))],
+        boxShadow: Platform.isAndroid ? null : [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 3))],
       ),
     );
   }
@@ -202,53 +209,127 @@ class SoftHeader extends StatelessWidget {
 }
 
 /// Недельная лента (пн–вс текущей недели относительно [anchor]).
-class WeekStrip extends StatelessWidget {
+class WeekStrip extends StatefulWidget {
   const WeekStrip({
     super.key,
     required this.selected,
     required this.daysWithData,
     required this.onTap,
     required this.accent,
+    this.counts,
+    this.daysBack,
+    this.daysAhead,
   });
   final DateTime? selected;
   final Set<int> daysWithData; // ключи вида y*10000+m*100+d
   final ValueChanged<DateTime> onTap;
   final Color accent;
 
+  /// Число под каждым днём (ключ как в [keyOf]). Если задано — вместо точки
+  /// «есть данные» рисуется само число: сколько приёмов/лидов в этот день
+  /// видно, не нажимая на дату.
+  final Map<int, int>? counts;
+
+  /// Горизонтальная лента дней: [daysBack] дней назад и [daysAhead] вперёд от
+  /// сегодня, прокручивается пальцем, при открытии сегодня стоит вторым
+  /// слева. Если оба не заданы — прежняя лента текущей недели пн–вс.
+  final int? daysBack;
+  final int? daysAhead;
+
   static int keyOf(DateTime d) => d.year * 10000 + d.month * 100 + d.day;
   static const _wd = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
+  static const _mon = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+  /// Ширина ячейки дня в прокручиваемой ленте (вместе с зазором).
+  static const double _cellW = 54;
+
+  @override
+  State<WeekStrip> createState() => _WeekStripState();
+}
+
+class _WeekStripState extends State<WeekStrip> {
+  ScrollController? _ctrl;
+
+  bool get _scrollable => widget.daysBack != null || widget.daysAhead != null;
+  int get _back => widget.daysBack ?? 0;
+  int get _ahead => widget.daysAhead ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_scrollable) {
+      // Сегодня — вторая ячейка слева: вчерашний день ещё виден, а впереди
+      // максимум места под ближайшие дни, которые и нужны расписанию.
+      final startIdx = (_back - 1).clamp(0, _back);
+      _ctrl = ScrollController(initialScrollOffset: startIdx * WeekStrip._cellW);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final monday = DateTime(now.year, now.month, now.day).subtract(Duration(days: now.weekday - 1));
-    // Все 7 дней помещаются в ширину — без скролла и без «плиток»-блоков:
-    // фон есть только у выбранного дня, сегодня отмечено тонкой обводкой.
-    return Row(
-      children: [
-        for (var i = 0; i < 7; i++)
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(right: i < 6 ? 6 : 0),
-              child: _day(monday.add(Duration(days: i)), i, now),
+    final today = DateTime(now.year, now.month, now.day);
+    if (!_scrollable) {
+      final monday = today.subtract(Duration(days: now.weekday - 1));
+      // Все 7 дней помещаются в ширину — без скролла: фон есть только у
+      // выбранного дня, сегодня отмечено тонкой обводкой.
+      return Row(
+        children: [
+          for (var i = 0; i < 7; i++)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(right: i < 6 ? 6 : 0),
+                child: _day(monday.add(Duration(days: i)), now),
+              ),
             ),
-          ),
-      ],
+        ],
+      );
+    }
+    final first = today.subtract(Duration(days: _back));
+    final total = _back + _ahead + 1;
+    return SizedBox(
+      height: widget.counts != null ? 84 : 76,
+      child: ListView.builder(
+        controller: _ctrl,
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        itemExtent: WeekStrip._cellW,
+        itemCount: total,
+        itemBuilder: (_, i) => Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: _day(first.add(Duration(days: i)), now),
+        ),
+      ),
     );
   }
 
-  Widget _day(DateTime day, int i, DateTime now) {
-    final isSel = selected != null &&
-        selected!.year == day.year && selected!.month == day.month && selected!.day == day.day;
-    final hasData = daysWithData.contains(keyOf(day));
+  Widget _day(DateTime day, DateTime now) {
+    final sel = widget.selected;
+    final isSel = sel != null && sel.year == day.year && sel.month == day.month && sel.day == day.day;
+    final hasData = widget.daysWithData.contains(WeekStrip.keyOf(day));
     final isToday = day.year == now.year && day.month == now.month && day.day == now.day;
+    // Первое число месяца подписано месяцем, а не днём недели: в длинной
+    // ленте иначе не понять, где кончился август и начался сентябрь.
+    final top = day.day == 1 && _scrollable ? WeekStrip._mon[day.month - 1] : WeekStrip._wd[day.weekday - 1];
+    final count = widget.counts?[WeekStrip.keyOf(day)] ?? 0;
     return GestureDetector(
-      onTap: () => onTap(day),
+      onTap: () => widget.onTap(day),
       behavior: HitTestBehavior.opaque,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(_wd[i], style: TextStyle(fontSize: 10.5, color: Colors.white.withValues(alpha: isSel ? 0.95 : 0.6))),
+          Text(top,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: day.day == 1 && _scrollable ? FontWeight.w800 : FontWeight.w400,
+                color: Colors.white.withValues(alpha: isSel || (day.day == 1 && _scrollable) ? 0.95 : 0.6),
+              )),
           const SizedBox(height: 9),
           AnimatedContainer(
             duration: const Duration(milliseconds: 160),
@@ -264,17 +345,45 @@ class WeekStrip extends StatelessWidget {
             ),
             alignment: Alignment.center,
             child: Text('${day.day}',
-                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: isSel ? accent : Colors.white)),
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: isSel ? widget.accent : Colors.white)),
           ),
-          const SizedBox(height: 7),
-          Container(
-            width: 4,
-            height: 4,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: hasData ? Colors.white.withValues(alpha: 0.85) : Colors.transparent,
+          const SizedBox(height: 5),
+          if (widget.counts != null)
+            // Число вместо точки: «8 приёмов в среду» видно сразу.
+            SizedBox(
+              height: 16,
+              child: count > 0
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: isSel ? 0.95 : 0.22),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '$count',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          color: isSel ? widget.accent : Colors.white,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    )
+                  : null,
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Container(
+                width: 4,
+                height: 4,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: hasData ? Colors.white.withValues(alpha: 0.85) : Colors.transparent,
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -350,15 +459,23 @@ class StatCard extends StatelessWidget {
 
 /// Стеклянная стат-карточка для цветной шапки (белый текст на тил/красном).
 class HeaderStat extends StatelessWidget {
-  const HeaderStat({super.key, required this.value, required this.label, this.valueColor = Colors.white});
+  const HeaderStat({
+    super.key,
+    required this.value,
+    required this.label,
+    this.valueColor = Colors.white,
+    this.onTap,
+  });
   final String value;
   final String label;
   final Color valueColor;
 
+  /// Карточка кликабельна: нажатие раскрывает, из чего сложилось число.
+  final VoidCallback? onTap;
+
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
+    final card = Container(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.16),
@@ -385,13 +502,24 @@ class HeaderStat extends StatelessWidget {
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
-              child: Text(label,
-                  maxLines: 1,
-                  style: TextStyle(fontSize: 10.5, color: Colors.white.withValues(alpha: 0.8))),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(label,
+                    maxLines: 1,
+                    style: TextStyle(fontSize: 10.5, color: Colors.white.withValues(alpha: 0.8))),
+                // Стрелка — подсказка, что карточку можно открыть.
+                if (onTap != null) ...[
+                  const SizedBox(width: 2),
+                  Icon(Icons.chevron_right_rounded, size: 13, color: Colors.white.withValues(alpha: 0.8)),
+                ],
+              ]),
             ),
           ],
         ),
-      ),
+      );
+    return Expanded(
+      child: onTap == null
+          ? card
+          : PressScale(scale: 0.97, onTap: onTap!, child: card),
     );
   }
 }

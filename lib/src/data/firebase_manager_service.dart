@@ -6,10 +6,16 @@ import 'package:cloud_functions/cloud_functions.dart';
 class FirebaseManagerService {
   FirebaseManagerService({FirebaseFirestore? db, FirebaseFunctions? functions})
       : _db = db ?? FirebaseFirestore.instance,
-        _functions = functions ?? FirebaseFunctions.instanceFor(region: 'europe-west1');
+        _injectedFunctions = functions;
 
   final FirebaseFirestore _db;
-  final FirebaseFunctions _functions;
+  final FirebaseFunctions? _injectedFunctions;
+
+  // Лениво: в превью-сборке (fake Firestore, без Firebase.initializeApp)
+  // обращение к FirebaseFunctions в конструкторе роняло запуск.
+  FirebaseFunctions? _cachedFunctions;
+  FirebaseFunctions get _functions =>
+      _injectedFunctions ?? (_cachedFunctions ??= FirebaseFunctions.instanceFor(region: 'europe-west1'));
 
   Stream<List<Map<String, dynamic>>> watchManagers() {
     return _db.collection('users').snapshots().map(

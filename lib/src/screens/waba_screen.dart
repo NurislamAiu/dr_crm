@@ -6,7 +6,7 @@ import '../data/waba_service.dart';
 import '../state/providers.dart';
 import 'soft_ui.dart';
 
-const _pageBg = Color(0xFFF1F8F6);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 const _waba = Color(0xFF2E7CF6);
 const _wabaDeep = Color(0xFF1B5BC4);
 

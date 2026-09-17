@@ -8,7 +8,7 @@ import '../state/providers.dart';
 import 'firebase_chats.dart';
 import 'soft_ui.dart';
 
-const _pageBg = Color(0xFFFBF3F2);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 const kRisk = Color(0xFFD2453F);
 const kRiskDeep = Color(0xFF9E2A26);
 const _amber = Color(0xFFB07A10);

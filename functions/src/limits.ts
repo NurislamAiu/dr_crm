@@ -117,7 +117,8 @@ export async function gateSend(p: {
 }
 
 export type OutboxItem = {
-  kind: "text" | "media";
+  /** template — одобренный Meta шаблон WABA (рассылка/напоминание). */
+  kind: "text" | "media" | "template";
   chatId: string;
   text?: string;
   name?: string;
@@ -131,6 +132,15 @@ export type OutboxItem = {
   reason?: string;
   /** WABA: ждём, пока клиент ответит — до этого свободный текст не уйдёт. */
   waitWindow?: boolean;
+  /** «Человечная» задержка: до этого момента processOutbox не отправляет. */
+  nextAttemptAt?: admin.firestore.Timestamp;
+  /** Автоответ на первое обращение: отменяется, если менеджер ответил сам. */
+  autoReply?: boolean;
+  /** Шаблон WABA: guid из кабинета Wazzup и значения переменных {{1}}, {{2}}… */
+  templateId?: string;
+  templateValues?: string[];
+  /** Часть рассылки — помечаем в переписке и в модуле контроля. */
+  broadcast?: boolean;
 };
 
 /**
@@ -162,17 +172,27 @@ export async function enqueue(item: OutboxItem): Promise<string> {
       crmMessageId: item.crmMessageId,
       queued: true,
       queueReason: item.reason ?? null,
+      ...(item.kind === "template" ? { isTemplate: true } : {}),
+      ...(item.broadcast ? { isBroadcast: true } : {}),
       ...(item.refMessageId ? { replyToId: item.refMessageId, replyToText: (item.replyToText ?? "").slice(0, 200) } : {}),
       createdAt: ts(),
     },
     { merge: true },
   );
 
+  // Автоответчик и догрев (authorId 'auto') чат в списке НЕ поднимают:
+  // порядок двигает только новое сообщение клиента (и живой ответ менеджера).
+  // Иначе пачка автосообщений выталкивала неотвеченные переписки вниз.
+  const bump = item.authorId === "auto"
+      ? {}
+      : {
+          lastMessageAt: ts(), lastMessagePreview: preview,
+          lastOutbound: true, lastAuthorId: item.authorId, lastAuthorName: null,
+        };
   await firestore.collection("conversations").doc(item.chatId).set(
     {
       contactId: item.chatId, phone: item.chatId, name, chatType: "whatsapp", status: "open",
-      lastMessageAt: ts(), lastMessagePreview: preview,
-      lastOutbound: true, lastAuthorId: item.authorId, lastAuthorName: null,
+      ...bump,
       updatedAt: ts(),
     },
     { merge: true },

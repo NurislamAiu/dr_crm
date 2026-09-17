@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:iconsax/iconsax.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/diag_service.dart';
 import '../data/presence_service.dart';
 import '../data/push_service.dart' show appNavigatorKey;
 import '../data/session_service.dart';
+import '../design/design.dart';
 import '../state/providers.dart';
-// import 'broadcast_screen.dart'; — вернуть вместе с вкладкой «Рассылка»
+import 'contest_screen.dart';
 import 'conversations_screen.dart';
 import 'firebase_chats.dart';
 import 'leads_screen.dart';
-import 'massage_screen.dart';
 import 'session_wait_screen.dart';
 import 'settings_screen.dart';
 import 'soft_ui.dart';
@@ -33,11 +35,60 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
   SessionService? _session;
   bool _kicked = false; // чтобы не показать окно дважды
 
+  /// Восстановление уже выполнялось для ЭТОГО входа (НЕ static: правило
+  /// «один менеджер в системе» означает, что за один запуск приложения
+  /// вход/выход могут смениться несколько раз — у каждого нового менеджера
+  /// должна быть своя попытка восстановить свой чат, static-флаг это
+  /// глушил после первого же логина в процессе).
+  bool _chatRestoreDone = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startPresence());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startPresence();
+      _restoreOpenChat();
+    });
+  }
+
+  /// Открыть чат, в котором менеджера застала гибель процесса.
+  ///
+  /// Android в фоне убивает приложение почти сразу — при возврате оно
+  /// запускается заново со списка чатов, и открытая переписка «закрывалась».
+  /// Экран чата держит отметку openChatId (снимается при штатном выходе из
+  /// чата) — если она осталась, значит процесс погиб с открытым чатом, и мы
+  /// возвращаем менеджера на место.
+  Future<void> _restoreOpenChat() async {
+    if (_chatRestoreDone) return;
+    _chatRestoreDone = true;
+    final cfg = ref.read(appConfigProvider);
+    if (!cfg.isFirebase || cfg.userId == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString('openChatId') ?? '';
+      final at = prefs.getInt('openChatAt') ?? 0;
+      final owner = prefs.getString('openChatUid') ?? '';
+      if (id.isEmpty) return;
+      // Устройство общее между менеджерами (правило «один менеджер в
+      // системе») — чужую открытую переписку не показываем.
+      if (owner != cfg.userId) {
+        await prefs.remove('openChatId');
+        return;
+      }
+      // Свежесть: чат, брошенный полдня назад, открывать заново не надо.
+      if (DateTime.now().millisecondsSinceEpoch - at > 6 * 3600 * 1000) {
+        await prefs.remove('openChatId');
+        return;
+      }
+      final conv = await ref.read(firestoreChatRepositoryProvider).watchConversation(id).first;
+      if (conv == null || !mounted) return;
+      final nav = appNavigatorKey.currentState;
+      if (nav == null || !nav.mounted) return;
+      await nav.push(MaterialPageRoute(builder: (_) => FirebaseChatScreen(conversation: conv)));
+    } catch (_) {
+      // Не вышло восстановить — остаёмся на списке, это не ошибка.
+    }
   }
 
   @override
@@ -128,17 +179,36 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     await svc.claim(uid: cfg.userId!, name: cfg.userName ?? '');
   }
 
+  bool _pushRegistered = false;
+
   void _startPresence() {
     if (!mounted) return;
     final cfg = ref.read(appConfigProvider);
     if (!cfg.isFirebase || cfg.userId == null) return;
+    // ИДЕМПОТЕНТНО: на Samsung сигнал resumed стреляет СЕРИЯМИ (каждая потеря/
+    // возврат фокуса окна, в т.ч. при выезде клавиатуры). Без этой защиты
+    // presence перезапускался 6-9 раз В СЕКУНДУ: шторм записей в Firestore,
+    // телефон захлёбывался, клавиатура не могла открыться.
+    if (_presenceOn) return;
     _presence = ref.read(firebasePresenceServiceProvider);
-    _presence!.start(cfg.userId!, cfg.userName ?? '');
+    // Админ (владелец) в списке «в сети» не светится: заходит проверить
+    // работу — и менеджеры сразу видят, что за ними наблюдают. На самих
+    // менеджеров это не распространяется, друг друга они видят как раньше.
+    final invisible = cfg.role == 'admin' || cfg.role == 'administrator';
+    _presence!.start(cfg.userId!, cfg.userName ?? '', hidden: invisible);
     _presenceOn = true;
-    // Пуши: регистрация FCM-токена + обработка тапа по уведомлению.
-    ref.read(pushServiceProvider).register(cfg.userId!);
+    // Пуши: регистрация FCM-токена — один раз за запуск приложения.
+    if (!_pushRegistered) {
+      _pushRegistered = true;
+      ref.read(pushServiceProvider).register(cfg.userId!);
+    }
     _session = ref.read(sessionServiceProvider);
+    // Удалённая диагностика (ошибки/jank/клавиатура) → clientLogs/{uid}.
+    DiagService.instance.start(cfg.userId!);
   }
+
+  @override
+  void didChangeMetrics() => DiagService.instance.onMetrics();
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -147,7 +217,12 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     final presence = ref.read(firebasePresenceServiceProvider);
     if (state == AppLifecycleState.resumed) {
       _startPresence();
-    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      // inactive НЕ считаем уходом: он приходит при каждой потере фокуса окна
+      // (клавиатура, шторка, диалог) — на Samsung сериями. Раньше пара
+      // inactive→resumed устраивала stop/start presence на каждый чих.
       if (_presenceOn) {
         presence.stop();
         _presenceOn = false;
@@ -165,7 +240,15 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
 
     // Правило «один менеджер в системе»: включается админом в настройках,
     // на самого админа не распространяется.
-    final singleSession = ref.watch(singleSessionEnabledProvider).value ?? true;
+    //
+    // Пока настройка ещё не подгрузилась из Firestore (доля секунды на
+    // старте приложения), .value равен null — и раньше тут стояло «?? true»,
+    // то есть на этот короткий момент правило считалось ВКЛЮЧЕННЫМ, даже
+    // если админ его выключил. Этого хватало, чтобы _syncSession занял
+    // сессию за собой и вытолкнул остальных менеджеров, прежде чем настоящее
+    // (выключенное) значение успевало прийти. Безопасный дефолт на время
+    // загрузки — «выключено»: ничего не отнимаем, пока не знаем наверняка.
+    final singleSession = ref.watch(singleSessionEnabledProvider).value ?? false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncSession(enabled: singleSession, isAdmin: isAdmin);
     });
@@ -179,131 +262,45 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     final pages = [
       isFirebase ? const FirebaseConversationsScreen() : const ConversationsScreen(),
       const LeadsScreen(),
-      const MassageScreen(),
+      // «Массаж» уехал из нижней панели: место занял экран соревнования.
+      // Сами записи на массаж никуда не делись — они по-прежнему создаются
+      // из карточки клиента и участвуют в расписании.
+      const ContestScreen(),
       const VipClientsScreen(),
-      // Рассылка временно скрыта (вернуть: if (isAdmin) const BroadcastScreen()).
       const SettingsScreen(),
     ];
-    final items = <(IconData, String)>[
-      (Iconsax.message, 'Чаты'),
-      (Iconsax.flash_1, 'Лиды'),
-      (Iconsax.health, 'Массаж'),
-      (Iconsax.crown_1, 'VIP'),
-      // if (isAdmin) (Iconsax.send_2, 'Рассылка'),
-      (Iconsax.setting_2, 'Настройки'),
+    const items = <AppTabItem>[
+      AppTabItem(icon: Iconsax.message, label: 'Чаты'),
+      AppTabItem(icon: Iconsax.flash_1, label: 'Лиды'),
+      AppTabItem(icon: Iconsax.cup, label: 'Конкурс'),
+      AppTabItem(icon: Iconsax.crown_1, label: 'VIP'),
+      AppTabItem(icon: Iconsax.setting_2, label: 'Настройки'),
     ];
     final index = _index.clamp(0, pages.length - 1);
+
+    // Кнопки «+» рядом с таб-баром нет: на экранах лидов, массажа и VIP
+    // своя кнопка создания в шапке, а всплывающая рядом мешала.
+
     return Scaffold(
-      body: IndexedStack(index: index, children: pages),
-      bottomNavigationBar: _SoftNavBar(items: items, index: index, onTap: (i) => setState(() => _index = i)),
-    );
-  }
-}
-
-/// «Мягкий» нижний навбар: скруглённый верх, пилюля-подсветка активной вкладки,
-/// Iconsax-иконки. Отступ снизу берётся из безопасной зоны — работает и с
-/// iOS home-индикатором, и с Android gesture/кнопочной навигацией.
-class _SoftNavBar extends StatelessWidget {
-  const _SoftNavBar({required this.items, required this.index, required this.onTap});
-  final List<(IconData, String)> items;
-  final int index;
-  final ValueChanged<int> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final bg = dark ? const Color(0xFF141E22) : Colors.white;
-    final inactive = dark ? const Color(0xFF7E938D) : kSub;
-    // Нижний системный отступ (home-индикатор / gesture bar); если его нет
-    // (Android с кнопками) — даём собственные 10.
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-    return Container(
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: dark ? 0.35 : 0.07),
-            blurRadius: 22,
-            offset: const Offset(0, -6),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(4, 9, 4, bottomInset > 0 ? bottomInset : 10),
-          child: Row(
-            children: [
-              for (var i = 0; i < items.length; i++)
-                Expanded(
-                  child: _NavItem(
-                    icon: items[i].$1,
-                    label: items[i].$2,
-                    selected: i == index,
-                    inactive: inactive,
-                    compact: items.length > 5, // 6 вкладок — ужимаем пилюлю
-                    onTap: () => onTap(i),
-                  ),
-                ),
-            ],
+      // Контент проезжает под стеклянным баром.
+      extendBody: true,
+      body: MediaQuery(
+        // Экраны, уважающие безопасную зону, сами отступят от бара.
+        data: MediaQuery.of(context).copyWith(
+          padding: MediaQuery.paddingOf(context).copyWith(
+            bottom: MediaQuery.paddingOf(context).bottom + FloatingTabBar.height + AppSpace.sm,
           ),
         ),
+        child: IndexedStack(index: index, children: pages),
+      ),
+      bottomNavigationBar: FloatingTabBar(
+        items: items,
+        index: index,
+        onChanged: (i) => setState(() => _index = i),
       ),
     );
   }
 }
 
-class _NavItem extends StatelessWidget {
-  const _NavItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.inactive,
-    required this.onTap,
-    this.compact = false,
-  });
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final Color inactive;
-  final VoidCallback onTap;
 
-  /// Плотный режим (6 вкладок): уже пилюля и мельче подпись.
-  final bool compact;
 
-  @override
-  Widget build(BuildContext context) {
-    final color = selected ? kTealDeep : inactive;
-    return InkResponse(
-      onTap: onTap,
-      radius: 40,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 17, vertical: 5),
-            decoration: BoxDecoration(
-              color: selected ? kTeal.withValues(alpha: 0.14) : Colors.transparent,
-              borderRadius: BorderRadius.circular(30),
-            ),
-            child: Icon(icon, size: compact ? 21 : 22, color: color),
-          ),
-          const SizedBox(height: 3),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(label,
-                maxLines: 1,
-                style: TextStyle(
-                    fontSize: compact ? 9.5 : 10.5,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: color)),
-          ),
-        ],
-      ),
-    );
-  }
-}

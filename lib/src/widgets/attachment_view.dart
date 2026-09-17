@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../data/voice_playback.dart';
 import '../models/models.dart';
 import '../state/providers.dart';
 
@@ -216,6 +217,9 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   Future<void> _ensurePrepared() async {
     if (_prepared) return;
     setState(() => _loading = true);
+    // Режим воспроизведения: иначе после записи голосового звук уходит в
+    // тихий разговорный динамик («играет, но не слышно»).
+    await ensurePlaybackSession();
     try {
       await _player.setAudioSource(AudioSource.uri(Uri.parse(widget.url), headers: widget.headers));
       _prepared = true;

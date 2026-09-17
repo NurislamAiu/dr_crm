@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../design/design.dart';
 import '../models/vip_client.dart';
 import '../state/providers.dart';
 import 'soft_ui.dart';
@@ -144,6 +145,7 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
         await repo.create(client, createdBy: ref.read(appConfigProvider).userId);
       }
       if (!mounted) return;
+      Haptics.success();
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -159,6 +161,7 @@ class _VipClientSheetState extends ConsumerState<VipClientSheet> {
       );
     } catch (e) {
       if (!mounted) return;
+      Haptics.error();
       setState(() => _saving = false);
       final msg = e is FirebaseException
           ? 'Firestore: ${e.code}${e.message != null ? ' — ${e.message}' : ''}'

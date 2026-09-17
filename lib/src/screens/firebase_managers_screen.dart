@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../data/prank_service.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
+import '../widgets/prank_host.dart';
 
 const _roleLabels = {'admin': 'Админ', 'administrator': 'Админ', 'manager': 'Менеджер', 'viewer': 'Наблюдатель'};
 
@@ -85,6 +88,13 @@ class FirebaseManagersScreen extends ConsumerWidget {
               ),
             ]),
           ),
+          // Розыгрыш: картинка на весь экран у менеджера на пару секунд.
+          if (!isMe)
+            IconButton(
+              icon: const Icon(Icons.emoji_emotions_outlined, size: 20),
+              tooltip: 'Прикол',
+              onPressed: () => _prank(context, ref, u),
+            ),
           IconButton(icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () => _openEditor(context, existing: u)),
           Switch(
             value: active,
@@ -100,6 +110,90 @@ class FirebaseManagersScreen extends ConsumerWidget {
         ]),
       ),
     );
+  }
+
+  /// Показать менеджеру картинку на 2 секунды. Картинка выбирается один раз
+  /// и запоминается — дальше розыгрыш это одно нажатие.
+  Future<void> _prank(BuildContext context, WidgetRef ref, Map<String, dynamic> u) async {
+    final svc = ref.read(prankServiceProvider);
+    final me = ref.read(appConfigProvider);
+    final uid = u['id'] as String;
+    final name = ((u['name'] ?? '') as String).trim();
+    final messenger = ScaffoldMessenger.of(context);
+
+    Future<void> fire(String url) async {
+      await svc.send(uid: uid, url: url, seconds: 2, fromName: me.userName);
+      messenger.showSnackBar(SnackBar(content: Text('Отправлено${name.isEmpty ? '' : ' — $name'} 😄')));
+    }
+
+    Future<String?> pick() async {
+      final x = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
+      if (x == null) return null;
+      return svc.setImage(bytes: await x.readAsBytes(), contentType: x.mimeType ?? 'image/jpeg');
+    }
+
+    try {
+      final hasAsset = await prankAssetExists();
+      final current = await svc.image();
+      if (!hasAsset && (current == null || current.isEmpty)) {
+        final url = await pick();
+        if (url == null) return;
+        await fire(url);
+        return;
+      }
+      if (!context.mounted) return;
+      final action = await showModalBottomSheet<String>(
+        context: context,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        builder: (sheet) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Row(children: [
+                const Icon(Icons.emoji_emotions_outlined, size: 26, color: AppColors.brand),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(name.isEmpty ? 'Менеджеру' : name,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                ),
+              ]),
+            ),
+            // Встроенная картинка уходит мгновенно: она уже в сборке у всех.
+            if (hasAsset)
+              ListTile(
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset(kPrankAsset, width: 34, height: 34, fit: BoxFit.cover),
+                ),
+                title: const Text('Системная картинка (мгновенно)'),
+                subtitle: const Text('2 секунды на весь экран'),
+                onTap: () => Navigator.pop(sheet, 'asset'),
+              ),
+            if (current != null && current.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.send_rounded, color: AppColors.brand),
+                title: const Text('Показать свою картинку (2 сек)'),
+                onTap: () => Navigator.pop(sheet, 'send'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Выбрать другую картинку'),
+              onTap: () => Navigator.pop(sheet, 'pick'),
+            ),
+          ]),
+        ),
+      );
+      if (action == 'asset') {
+        await fire(PrankItem.asset);
+      } else if (action == 'send' && current != null) {
+        await fire(current);
+      } else if (action == 'pick') {
+        final url = await pick();
+        if (url != null) await fire(url);
+      }
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Не получилось: $e')));
+    }
   }
 
   Future<void> _openEditor(BuildContext context, {Map<String, dynamic>? existing}) {

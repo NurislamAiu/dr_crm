@@ -8,14 +8,15 @@ import '../config/app_config.dart';
 import '../data/firebase_manager_service.dart';
 import '../data/firestore_chat_repository.dart';
 import '../data/lead_repository.dart';
+import '../models/lead.dart';
 import '../data/massage_repository.dart';
-import '../data/autoreply_service.dart';
-import '../data/broadcast_repository.dart';
 import '../data/channel_status_service.dart';
 import '../data/presence_service.dart';
 import '../data/push_service.dart';
+import '../data/prank_service.dart';
 import '../data/quick_replies_service.dart';
 import '../data/risk_service.dart';
+import '../data/contest_service.dart';
 import '../data/session_service.dart';
 import '../data/stream_retry.dart';
 import '../data/vip_repository.dart';
@@ -42,6 +43,17 @@ bool _isToday(DateTime? d) {
   if (d == null) return false;
   final n = DateTime.now();
   return d.year == n.year && d.month == n.month && d.day == n.day;
+}
+
+/// Текущая неделя — с понедельника по воскресенье, как недельная лента на
+/// экранах лидов и массажа. Не «последние 7 дней»: соревнование недели должно
+/// обнуляться в понедельник, а не ползти скользящим окном.
+bool _isThisWeek(DateTime? d) {
+  if (d == null) return false;
+  final n = DateTime.now();
+  final monday = DateTime(n.year, n.month, n.day).subtract(Duration(days: n.weekday - 1));
+  final nextMonday = monday.add(const Duration(days: 7));
+  return !d.isBefore(monday) && d.isBefore(nextMonday);
 }
 
 /// Кэшированный список лидов (одна подписка на приложение).
@@ -130,11 +142,7 @@ final wabaServiceProvider = Provider<WabaService>((_) => WabaService());
 final wabaSettingsProvider =
     StreamProvider<WabaSettings>((ref) => ref.watch(wabaServiceProvider).watchSettings());
 
-/// Серверная рассылка.
-final broadcastRepositoryProvider = Provider<BroadcastRepository>((_) => BroadcastRepository());
 
-/// Последняя рассылка (прогресс в реальном времени из Firestore).
-final latestBroadcastProvider = StreamProvider((ref) => ref.watch(broadcastRepositoryProvider).watchLatest());
 
 /// Телефоны (только цифры) активных VIP-клиентов — для пометки чатов.
 final vipPhonesProvider = Provider<Set<String>>((ref) {
@@ -154,6 +162,74 @@ final leadsTodayCountProvider = Provider<int>((ref) {
   return list.where((l) => !l.archived && _isToday(l.createdAt)).length;
 });
 
+/// Соревнование менеджеров: цель по лидам за день и премия.
+final contestServiceProvider = Provider<ContestService>((_) => ContestService());
+
+/// Порог премии за день. Поток: админ меняет — у всех обновляется.
+final contestGoalProvider = StreamProvider<int>((ref) => ref.watch(contestServiceProvider).watchGoal());
+
+/// Порог премии за неделю.
+final contestWeekGoalProvider =
+    StreamProvider<int>((ref) => ref.watch(contestServiceProvider).watchWeekGoal());
+
+/// Порог командной премии за месяц.
+final contestMonthGoalProvider =
+    StreamProvider<int>((ref) => ref.watch(contestServiceProvider).watchMonthGoal());
+
+/// Личные планки премий менеджеров (общая + индивидуальные исключения).
+final contestPersonalGoalsProvider = StreamProvider<PersonalGoals>(
+    (ref) => ref.watch(contestServiceProvider).watchPersonalGoals());
+
+/// Сколько лидов оформил каждый менеджер: uid → счёт, по убыванию.
+///
+/// Считаем по leads.createdBy — тому, кто реально создал карточку. Архивные
+/// не в счёт: иначе лид можно было бы «накрутить» и сразу убрать.
+List<MapEntry<String, int>> _boardBy(List<Lead> list, bool Function(DateTime?) inPeriod) {
+  final byUid = <String, int>{};
+  for (final l in list) {
+    if (l.archived || !inPeriod(l.createdAt)) continue;
+    final uid = (l.createdBy ?? '').trim();
+    if (uid.isEmpty) continue;
+    byUid[uid] = (byUid[uid] ?? 0) + 1;
+  }
+  return byUid.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+}
+
+/// Зачёт дня: кто сколько оформил сегодня.
+final leadsTodayByManagerProvider = Provider<List<MapEntry<String, int>>>((ref) {
+  return _boardBy(ref.watch(leadsListProvider).value ?? const [], _isToday);
+});
+
+/// Зачёт недели: кто сколько оформил с понедельника.
+final leadsWeekByManagerProvider = Provider<List<MapEntry<String, int>>>((ref) {
+  return _boardBy(ref.watch(leadsListProvider).value ?? const [], _isThisWeek);
+});
+
+/// Текущий календарный месяц — с 1-го числа. Как и неделя, обнуляется по
+/// календарю, а не скользящим окном «последние 30 дней».
+bool _isThisMonth(DateTime? d) {
+  if (d == null) return false;
+  final n = DateTime.now();
+  return d.year == n.year && d.month == n.month;
+}
+
+/// Зачёт месяца: кто сколько оформил с 1-го числа.
+final leadsMonthByManagerProvider = Provider<List<MapEntry<String, int>>>((ref) {
+  return _boardBy(ref.watch(leadsListProvider).value ?? const [], _isThisMonth);
+});
+
+/// Зачёт за ЛЮБОЙ день — чтобы в конкурсе листать прошедшие дни, а не только
+/// смотреть сегодняшний. Считает по тому же списку лидов, что уже загружен,
+/// так что перелистывание дней не стоит ни одного лишнего чтения базы.
+final leadsByManagerOnDayProvider =
+    Provider.family<List<MapEntry<String, int>>, DateTime>((ref, day) {
+  final d0 = DateTime(day.year, day.month, day.day);
+  return _boardBy(
+    ref.watch(leadsListProvider).value ?? const [],
+    (t) => t != null && DateTime(t.year, t.month, t.day) == d0,
+  );
+});
+
 
 /// Firebase Auth (миграция backend на Firebase).
 final firebaseAuthServiceProvider = Provider<FirebaseAuthService>((_) => FirebaseAuthService());
@@ -171,11 +247,29 @@ final firebaseMessagesProvider = StreamProvider.autoDispose.family<List<FsMessag
   return resilient(() => ref.watch(firestoreChatRepositoryProvider).watchMessages(conversationId));
 });
 
+/// Живой документ ОДНОГО диалога — для экрана чата (typing/ответственный/
+/// номер). Отдельная лёгкая подписка: чат не должен перестраиваться от
+/// событий в чужих чатах.
+final conversationDocProvider = StreamProvider.autoDispose.family<FsConversation?, String>((ref, conversationId) {
+  return resilient(() => ref.watch(firestoreChatRepositoryProvider).watchConversation(conversationId));
+});
+
 /// Присутствие менеджеров через Firestore (firebase-режим).
 final firebasePresenceServiceProvider = Provider<FirebasePresenceService>((_) => FirebasePresenceService());
 
 /// Управление менеджерами в firebase-режиме.
 final firebaseManagerServiceProvider = Provider<FirebaseManagerService>((_) => FirebaseManagerService());
+
+/// Розыгрыш: картинка на весь экран у выбранного менеджера.
+final prankServiceProvider = Provider<PrankService>((_) => PrankService());
+
+/// Слот розыгрыша конкретного менеджера (он читает только свой).
+final prankProvider = StreamProvider.autoDispose.family<PrankItem?, String>(
+  (ref, uid) => ref.watch(prankServiceProvider).watch(uid),
+);
+
+/// Картинка розыгрыша, выбранная админом (config/prank).
+final prankImageProvider = StreamProvider<String?>((ref) => ref.watch(prankServiceProvider).watchImage());
 
 /// Быстрые ответы (шаблоны сообщений, Firestore).
 final quickRepliesServiceProvider = Provider<QuickRepliesService>((_) => QuickRepliesService());
@@ -185,8 +279,6 @@ final quickRepliesProvider = StreamProvider<List<QuickReply>>((ref) {
   return ref.watch(quickRepliesServiceProvider).watch();
 });
 
-/// Автоответчик (Firestore config/autoReply).
-final autoReplyServiceProvider = Provider<AutoReplyService>((_) => AutoReplyService());
 
 /// Онлайн-менеджер (присутствие в системе).
 class OnlineUser {

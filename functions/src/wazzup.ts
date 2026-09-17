@@ -44,6 +44,17 @@ export interface WazzupStatus {
  * канале. Для WABA вне 24-часового окна вместо text передаётся одобренный
  * Meta шаблон: templateId + значения переменных.
  */
+/**
+ * Код шаблона WABA для поля text: «@template: <guid> { [[знач1]]; [[знач2]] }».
+ * Ровно в таком виде его отдаёт сам Wazzup в поле templateCode — значения
+ * подставляем вместо заготовок [[bodyVarN]].
+ */
+export function wabaTemplateCode(guid: string, values: string[]): string {
+  // Скобки и «;» внутри значения ломают разбор кода — вычищаем.
+  const clean = (v: string) => v.replace(/[[\]{};]/g, " ").replace(/\s+/g, " ").trim();
+  return `@template: ${guid} { ${values.map((v) => `[[${clean(v)}]]`).join("; ")} }`;
+}
+
 export async function wazzupSendText(
   apiKey: string,
   input: {
@@ -65,9 +76,11 @@ export async function wazzupSendText(
       channelId: input.channelId,
       chatId: input.chatId,
       chatType: input.chatType,
-      // text и templateId одновременно передавать нельзя.
+      // Шаблон уходит КОДОМ в поле text (документированный формат Wazzup).
+      // С параметром templateId сообщение уходило как обычный текст, и Meta
+      // отбивала его с 24_HOURS_EXCEEDED — окно у молчащего клиента закрыто.
       ...(template
-        ? { templateId: template, templateValues: input.templateValues ?? [] }
+        ? { text: wabaTemplateCode(template, input.templateValues ?? []) }
         : { text: input.text }),
       crmMessageId: input.crmMessageId,
       ...(input.refMessageId ? { refMessageId: input.refMessageId } : {}),

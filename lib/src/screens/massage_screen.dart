@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:iconsax/iconsax.dart';
 
+import '../design/design.dart';
 import '../models/massage.dart';
 import '../state/providers.dart';
 import 'archive_actions.dart';
@@ -11,7 +12,7 @@ import 'massage_sheet.dart';
 import 'soft_ui.dart';
 
 // Тёплый жёлтый фон раздела «Массаж».
-const _pageBg = Color(0xFFFDF8EC);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 const _mass = Color(0xFFE3A008);      // янтарный акцент
 const _massDeep = Color(0xFF8C5F04);  // тёмный янтарь для текста
 
@@ -213,7 +214,7 @@ class _MassageScreenState extends ConsumerState<MassageScreen> {
                   transform: Matrix4.translationValues(0, -22, 0),
                   decoration: const BoxDecoration(color: _pageBg, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
                   child: !massagesAsync.hasValue
-                      ? const Center(child: CircularProgressIndicator())
+                      ? const SkeletonList()
                       : _sheet(leads, sumLabel.isEmpty ? '0 ₸' : sumLabel.join(' · ')),
                 ),
               ),
@@ -288,7 +289,7 @@ class _MassageScreenState extends ConsumerState<MassageScreen> {
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(15, 2, 15, 24),
+      padding: EdgeInsets.fromLTRB(15, 2, 15, 24 + MediaQuery.paddingOf(context).bottom),
       itemCount: rows.length,
       itemBuilder: (context, i) {
         final row = rows[i];

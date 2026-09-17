@@ -6,12 +6,19 @@ import '../data/quick_replies_service.dart';
 import '../state/providers.dart';
 import 'soft_ui.dart';
 
-const _pageBg = Color(0xFFF1F8F6);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 
 /// Управление быстрыми ответами (шаблонами сообщений).
 /// Шаблоны общие для всех менеджеров, вставляются в чате кнопкой ⚡.
 class QuickRepliesScreen extends ConsumerWidget {
   const QuickRepliesScreen({super.key});
+
+  /// Удалять шаблоны может только админ: менеджер, стерев общий шаблон,
+  /// ломает его сразу всем (и серверные варианты текста к нему).
+  static bool isAdmin(WidgetRef ref) {
+    final role = ref.read(appConfigProvider).role;
+    return role == 'admin' || role == 'administrator';
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -105,8 +112,12 @@ class QuickRepliesScreen extends ConsumerWidget {
               Container(
                 width: 40,
                 height: 40,
-                decoration: BoxDecoration(color: kTeal.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(13)),
-                child: const Icon(Iconsax.flash_1, size: 19, color: kTealDeep),
+                decoration: BoxDecoration(
+                  color: (r.pinned ? const Color(0xFFE8A317) : kTeal).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(r.pinned ? Iconsax.star_1 : Iconsax.flash_1,
+                    size: 19, color: r.pinned ? const Color(0xFFB87A00) : kTealDeep),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -122,11 +133,22 @@ class QuickRepliesScreen extends ConsumerWidget {
                       style: const TextStyle(fontSize: 12.5, color: kSub, height: 1.3)),
                 ]),
               ),
-              IconButton(
-                icon: const Icon(Iconsax.trash, size: 19, color: Color(0xFFD9776F)),
-                tooltip: 'Удалить',
-                onPressed: () => _confirmDelete(context, ref, r),
-              ),
+              // Шаблоны акций наверху по названию — открепить их кнопкой
+              // нельзя, иначе кнопка врала бы: список всё равно поднял бы их
+              // обратно. Чтобы опустить — переименуйте шаблон.
+              if (isAdmin(ref) && !QuickReply.isPromoTitle(r.title))
+                IconButton(
+                  icon: Icon(r.pinned ? Iconsax.star_1 : Iconsax.star,
+                      size: 19, color: r.pinned ? const Color(0xFFB87A00) : kSub),
+                  tooltip: r.pinned ? 'Открепить' : 'Закрепить сверху',
+                  onPressed: () => ref.read(quickRepliesServiceProvider).setPinned(r.id, !r.pinned),
+                ),
+              if (isAdmin(ref))
+                IconButton(
+                  icon: const Icon(Iconsax.trash, size: 19, color: Color(0xFFD9776F)),
+                  tooltip: 'Удалить',
+                  onPressed: () => _confirmDelete(context, ref, r),
+                ),
             ]),
           ),
         ),
@@ -151,7 +173,21 @@ class QuickRepliesScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (ok == true) await ref.read(quickRepliesServiceProvider).delete(r.id);
+    if (ok != true) return;
+    await ref.read(quickRepliesServiceProvider).delete(r.id);
+    if (!context.mounted) return;
+    // Возврат удалённого: шаблон общий, потерять его текст (адрес клиники и
+    // т.п.) из-за одного случайного нажатия нельзя.
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Шаблон «${r.title}» удалён'),
+        action: SnackBarAction(
+          label: 'Отменить',
+          onPressed: () => ref.read(quickRepliesServiceProvider).add(title: r.title, text: r.text),
+        ),
+        duration: const Duration(seconds: 6),
+      ),
+    );
   }
 
   /// Создание/редактирование шаблона (нижний шит).

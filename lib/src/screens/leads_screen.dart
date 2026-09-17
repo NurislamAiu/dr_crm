@@ -1,17 +1,19 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:iconsax/iconsax.dart';
 
+import '../design/design.dart';
 import '../models/lead.dart';
 import '../state/providers.dart';
 import 'archive_actions.dart';
-import 'day_utils.dart';
 import 'lead_sheet.dart';
 import 'soft_ui.dart';
 
 // Тил-тонированный фон (медицинская палитра из дизайн-системы).
-const _pageBg = Color(0xFFF1F8F6);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 
 /// Экран лидов — «мягкий» стиль: тил-шапка со скруглением, недельная лента,
 /// стат-карточки, карточки с аватаром по стране. Данные из Firestore `leads`.
@@ -22,17 +24,44 @@ class LeadsScreen extends ConsumerStatefulWidget {
   ConsumerState<LeadsScreen> createState() => _LeadsScreenState();
 }
 
+/// Экран — расписание приёмов: группировка и лента недели по ДНЮ ПРИЁМА.
+/// Раньше заголовки дней были «Сегодня», «Вчера» без пояснения, какой это
+/// день — приёма или записи, и руководство читало «Вчера» как «вчера
+/// записали». Теперь даты пишутся полностью, а «кто и когда записал» —
+/// мелкой строкой на карточке. Режимов нет: один экран — один ответ.
 class _LeadsScreenState extends ConsumerState<LeadsScreen> {
   bool _archive = false;
-  DateTime? _filterDate;
+
+  /// По умолчанию открыт СЕГОДНЯШНИЙ день: экран отвечает на первый вопрос
+  /// «кто сегодня придёт», а не показывает всю историю сразу.
+  DateTime? _filterDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   List<Lead> _current = [];
   Set<int> _daysWithData = {};
 
   static bool _sameDay(DateTime? a, DateTime? b) =>
       a != null && b != null && a.year == b.year && a.month == b.month && a.day == b.day;
 
+  DateTime? _dateOf(Lead l) => l.appointmentDate;
+
   void _toggleDay(DateTime day) {
     setState(() => _filterDate = _sameDay(_filterDate, day) ? null : day);
+  }
+
+  /// Полная подпись дня: «Сегодня · 6 сентября, вс». Относительное слово —
+  /// только как дополнение к дате, никогда вместо неё.
+  static String _dayTitle(DateTime? d) {
+    if (d == null) return 'Без даты приёма';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    final diff = day.difference(today).inDays;
+    final base = weekdayDateRu(day);
+    return switch (diff) {
+      0 => 'Сегодня · $base',
+      1 => 'Завтра · $base',
+      -1 => 'Вчера · $base',
+      _ => base,
+    };
   }
 
   Future<void> _pickFilterDate() async {
@@ -143,36 +172,61 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
     // Кэшированный провайдер: одна подписка на всё приложение —
     // setState (фильтры/архив) больше не перечитывает коллекцию с сервера.
     final leadsAsync = ref.watch(leadsListProvider);
+    // Кто завёл лид — по uid из users/. На карточке это отвечает на второй
+    // вопрос руководства: «а кто его записал».
+    final managers = ref.watch(managersProvider).value ?? const <Map<String, dynamic>>[];
+    String author(String? uid) {
+      if (uid == null || uid.isEmpty) return '';
+      for (final m in managers) {
+        if (m['id'] == uid) return ((m['name'] as String?) ?? '').trim().split(' ').first;
+      }
+      return '';
+    }
+
     return Scaffold(
       backgroundColor: _pageBg,
       body: Builder(
         builder: (context) {
           final all = leadsAsync.value ?? const <Lead>[];
           final active = all.where((l) => !l.archived).toList();
-          // Группировка и фильтр — по ДАТЕ ПРИЁМА (кто когда придёт).
-          final daysWithData = {for (final l in active) if (l.appointmentDate != null) WeekStrip.keyOf(l.appointmentDate!)};
-          _daysWithData = daysWithData;
+          // Числа под днями ленты — в текущем режиме: сколько приёмов (или
+          // сколько записано) в каждый день недели.
+          final counts = <int, int>{};
+          for (final l in active) {
+            final d = _dateOf(l);
+            if (d != null) counts[WeekStrip.keyOf(d)] = (counts[WeekStrip.keyOf(d)] ?? 0) + 1;
+          }
+          _daysWithData = counts.keys.toSet();
 
           var leads = all.where((l) => l.archived == _archive).toList();
-          if (_filterDate != null) leads = leads.where((l) => _sameDay(l.appointmentDate, _filterDate)).toList();
-          // Дни: ближайшие сверху; внутри дня — по времени приёма.
-          leads.sort((a, b) {
-            final da = a.appointmentDate, db = b.appointmentDate;
-            if (da == null && db != null) return 1;   // без даты — в конец
-            if (da != null && db == null) return -1;
-            if (da != null && db != null) {
-              final byDay = DateTime(db.year, db.month, db.day).compareTo(DateTime(da.year, da.month, da.day));
-              if (byDay != 0) return byDay;
-            }
-            return (a.appointmentTime ?? '').compareTo(b.appointmentTime ?? '');
-          });
+          if (_filterDate != null) leads = leads.where((l) => _sameDay(_dateOf(l), _filterDate)).toList();
+          final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
+          {
+            // Расписание: сначала сегодня и ближайшие дни по порядку, прошедшие
+            // — в конец (от вчера к более старым); без даты — самые последние.
+            // Внутри дня — по времени приёма.
+            leads.sort((a, b) {
+              final da = a.appointmentDate, db = b.appointmentDate;
+              if (da == null && db != null) return 1;
+              if (da != null && db == null) return -1;
+              if (da != null && db != null) {
+                final xa = DateTime(da.year, da.month, da.day), xb = DateTime(db.year, db.month, db.day);
+                final fa = !xa.isBefore(today), fb = !xb.isBefore(today);
+                if (fa != fb) return fa ? -1 : 1;
+                final byDay = fa ? xa.compareTo(xb) : xb.compareTo(xa);
+                if (byDay != 0) return byDay;
+              }
+              return (a.appointmentTime ?? '').compareTo(b.appointmentTime ?? '');
+            });
+          }
           _current = leads;
           // Предоплата считается раздельно по валютам.
           final sumKzt = leads.where((l) => (l.currency ?? kKzt) != kRub).fold<num>(0, (s, l) => s + (l.prepayment ?? 0));
           final sumRub = leads.where((l) => l.currency == kRub).fold<num>(0, (s, l) => s + (l.prepayment ?? 0));
           final sumLabel = [if (sumKzt > 0) '${money(sumKzt)} ₸', if (sumRub > 0) '${money(sumRub)} ₽'];
 
-          final headerDate = _filterDate ?? DateTime.now();
+          final headerDate = _filterDate ?? now;
 
           return Column(
             children: [
@@ -198,11 +252,20 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
                   ),
                   SoftHeaderButton(icon: Iconsax.add, filled: true, tooltip: 'Новый лид', onTap: () => LeadSheet.show(context)),
                 ],
-                strip: WeekStrip(
-                  selected: _filterDate,
-                  daysWithData: daysWithData,
-                  accent: kTealDeep,
-                  onTap: _toggleDay,
+                strip: Column(
+                  children: [
+                    // Лента листается пальцем: две недели назад и полтора
+                    // месяца вперёд — столько живёт расписание записей.
+                    WeekStrip(
+                      selected: _filterDate,
+                      daysWithData: _daysWithData,
+                      counts: counts,
+                      accent: kTealDeep,
+                      onTap: _toggleDay,
+                      daysBack: 14,
+                      daysAhead: 45,
+                    ),
+                  ],
                 ),
               ),
               Expanded(
@@ -210,8 +273,8 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
                   transform: Matrix4.translationValues(0, -22, 0),
                   decoration: const BoxDecoration(color: _pageBg, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
                   child: !leadsAsync.hasValue
-                      ? const Center(child: CircularProgressIndicator())
-                      : _sheet(leads, sumLabel.isEmpty ? '0 ₸' : sumLabel.join(' · ')),
+                      ? const SkeletonList()
+                      : _sheet(leads, sumLabel.isEmpty ? '0 ₸' : sumLabel.join(' · '), author),
                 ),
               ),
             ],
@@ -221,7 +284,16 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
     );
   }
 
-  Widget _sheet(List<Lead> leads, String sumLabel) {
+  Widget _sheet(List<Lead> leads, String sumLabel, String Function(String?) author) {
+    // Явный заголовок над списком: какой день приёма показан.
+    final String sectionTitle;
+    if (_archive) {
+      sectionTitle = 'Архив';
+    } else if (_filterDate != null) {
+      sectionTitle = 'Приёмы: ${_dayTitle(_filterDate)}';
+    } else {
+      sectionTitle = 'Все дни';
+    }
     return Column(
       children: [
         Padding(
@@ -229,9 +301,9 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
           child: Row(children: [
             StatCard(
               value: '${leads.length}',
-              label: _filterDate != null ? 'лидов за день' : 'лидов',
+              label: _filterDate != null ? 'приёмов в этот день' : 'приёмов всего',
               accent: kInk,
-              icon: Iconsax.flash_1,
+              icon: Iconsax.calendar_1,
               iconColor: kTeal,
             ),
             const SizedBox(width: 10),
@@ -244,38 +316,87 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
             ),
           ]),
         ),
-        if (_archive)
-          const Padding(
-            padding: EdgeInsets.fromLTRB(19, 14, 19, 4),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('Архив', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: kSub)),
-            ),
-          )
-        else
-          const SizedBox(height: 8),
-        Expanded(child: _list(leads)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(19, 14, 19, 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  sectionTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: kTealDeep),
+                ),
+              ),
+              if (_filterDate != null && !_archive)
+                GestureDetector(
+                  onTap: () => setState(() => _filterDate = null),
+                  behavior: HitTestBehavior.opaque,
+                  child: const Text(
+                    'все дни',
+                    style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: kSub),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Expanded(child: _list(leads, author)),
       ],
     );
   }
 
-  Widget _list(List<Lead> leads) {
+  Widget _list(List<Lead> leads, String Function(String?) author) {
     if (leads.isEmpty) {
       return _Empty(
-        icon: _archive ? Iconsax.archive_1 : Iconsax.flash_1,
-        title: _archive ? 'Архив пуст' : (_filterDate != null ? 'Нет лидов на эту дату' : 'Пока нет лидов'),
-        subtitle: _archive ? 'Сюда попадают удалённые лиды' : 'Создайте лид кнопкой + или из чата',
+        icon: _archive ? Iconsax.archive_1 : Iconsax.calendar_1,
+        title: _archive
+            ? 'Архив пуст'
+            : _filterDate != null
+                ? 'На этот день приёмов нет'
+                : 'Пока нет лидов',
+        subtitle: _archive
+            ? 'Сюда попадают удалённые лиды'
+            : _filterDate != null
+                ? 'Выберите другой день в ленте сверху'
+                : 'Создайте лид кнопкой + или из чата',
       );
     }
     final repo = ref.read(leadRepositoryProvider);
-    final grouped = _filterDate == null;
-    final rows = grouped ? groupByDay<Lead>(leads, (l) => l.appointmentDate) : leads.cast<Object>().toList();
+    // Подпись дня считается ОДИН раз на день, а не на каждую карточку:
+    // форматирование даты на 700 лидах в каждом кадре прокрутки — это и
+    // были «лаги» экрана.
+    final titleCache = <int, String>{};
+    String titleOf(DateTime? d) {
+      final k = d == null ? -1 : WeekStrip.keyOf(d);
+      return titleCache.putIfAbsent(k, () => _dayTitle(d));
+    }
 
-    // Нумерация: каждый день приёма заново с 1, по времени (как в расписании).
+    // Без фильтра — группы по дням с полной датой в заголовке; число лидов
+    // в заголовке — из готовой карты, а не перебором списка на каждый заголовок.
+    final grouped = _filterDate == null;
+    final rows = <Object>[];
+    final headerCount = <String, int>{};
+    if (grouped) {
+      String? current;
+      for (final l in leads) {
+        final key = titleOf(_dateOf(l));
+        headerCount[key] = (headerCount[key] ?? 0) + 1;
+        if (key != current) {
+          current = key;
+          rows.add(key);
+        }
+        rows.add(l);
+      }
+    } else {
+      rows.addAll(leads);
+    }
+
+    // Нумерация в расписании: каждый день приёма заново с 1, по времени.
     final dayIdx = <String, int>{};
-    final byDay = <String, List<Lead>>{};
+    final byDay = <int, List<Lead>>{};
     for (final l in leads) {
-      byDay.putIfAbsent(dayLabel(l.appointmentDate), () => []).add(l);
+      final d = l.appointmentDate;
+      byDay.putIfAbsent(d == null ? -1 : WeekStrip.keyOf(d), () => []).add(l);
     }
     for (final list in byDay.values) {
       final ordered = [...list]..sort((a, b) => (a.appointmentTime ?? '').compareTo(b.appointmentTime ?? ''));
@@ -285,13 +406,12 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(15, 2, 15, 24),
+      padding: EdgeInsets.fromLTRB(15, 2, 15, 24 + MediaQuery.paddingOf(context).bottom),
       itemCount: rows.length,
       itemBuilder: (context, i) {
         final row = rows[i];
         if (row is String) {
-          final cnt = leads.where((l) => dayLabel(l.appointmentDate) == row).length;
-          return softDayHeader(row, cnt, kTealDeep);
+          return softDayHeader(row, headerCount[row] ?? 0, kTealDeep);
         }
         final lead = row as Lead;
         final n = dayIdx[lead.id ?? ''];
@@ -304,7 +424,12 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
           onArchive: () => repo.archive(lead.id!, true),
           onRestore: () => repo.archive(lead.id!, false),
           onDeleteForever: () => repo.delete(lead.id!),
-          child: _LeadCard(lead, displayNumber: n, onEditPrepayment: _archive ? null : () => _quickEditPrepayment(lead)),
+          child: _LeadCard(
+            lead,
+            displayNumber: n,
+            author: author(lead.createdBy),
+            onEditPrepayment: _archive ? null : () => _quickEditPrepayment(lead),
+          ),
         );
       },
     );
@@ -312,25 +437,46 @@ class _LeadsScreenState extends ConsumerState<LeadsScreen> {
 }
 
 class _LeadCard extends StatelessWidget {
-  const _LeadCard(this.lead, {this.displayNumber, this.onEditPrepayment});
+  const _LeadCard(
+    this.lead, {
+    this.displayNumber,
+    this.onEditPrepayment,
+    this.author = '',
+  });
   final Lead lead;
 
-  /// Порядковый номер внутри дня (1..n), без учёта архива.
+  /// Порядковый номер внутри дня приёма (1..n), без учёта архива.
   final int? displayNumber;
   final VoidCallback? onEditPrepayment;
+
+  /// Кто завёл лид (имя менеджера).
+  final String author;
+
+  static final bool _cheapPaint = Platform.isAndroid;
 
   @override
   Widget build(BuildContext context) {
     final time = lead.appointmentTime;
     final paid = lead.prepayment != null;
+    // Третья строка: когда и кем записан — то, чего нет в группировке по дню
+    // приёма. Мелко, без переключателей.
+    final third = [
+      if (lead.createdAt != null) 'записан ${dateRu(lead.createdAt!)}',
+      if (author.isNotEmpty) author,
+    ].join(' · ');
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.fromLTRB(13, 13, 14, 13),
+      padding: const EdgeInsets.fromLTRB(13, 12, 14, 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(22),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 14, offset: const Offset(0, 4))],
+        // На Android размытая тень под каждой карточкой — самая дорогая часть
+        // кадра (список дёргался при прокрутке); там вместо неё тонкая рамка.
+        border: _cheapPaint ? Border.all(color: const Color(0xFFE6E9EC)) : null,
+        boxShadow: _cheapPaint
+            ? null
+            : [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 14, offset: const Offset(0, 4))],
       ),
       child: Row(
         children: [
@@ -344,7 +490,7 @@ class _LeadCard extends StatelessWidget {
                 Text(lead.name.isEmpty ? 'Без имени' : lead.name,
                     maxLines: 1, overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700, color: kInk, letterSpacing: -0.2)),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
@@ -356,6 +502,13 @@ class _LeadCard extends StatelessWidget {
                       maxLines: 1,
                       style: const TextStyle(fontSize: 12.5, color: kSub)),
                 ),
+                if (third.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(third,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11.5, color: kSub.withValues(alpha: 0.85))),
+                ],
               ],
             ),
           ),
@@ -367,22 +520,10 @@ class _LeadCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (time != null && time.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: const Color(0xFFF0F4F3), borderRadius: BorderRadius.circular(9)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Iconsax.clock, size: 11, color: kSub),
-                      const SizedBox(width: 4),
-                      Text(time,
-                          style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF465B55),
-                              fontFeatures: [FontFeature.tabularFigures()])),
-                    ]),
-                  ),
-                if (time != null && time.isNotEmpty) const SizedBox(height: 7),
+                if (time != null && time.isNotEmpty) ...[
+                  _chip(Iconsax.clock, time),
+                  const SizedBox(height: 7),
+                ],
                 paid
                     ? Text(moneyWith(lead.prepayment!, lead.currency),
                         style: const TextStyle(
@@ -407,6 +548,21 @@ class _LeadCard extends StatelessWidget {
       ),
     );
   }
+
+  static Widget _chip(IconData icon, String text) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(color: const Color(0xFFF0F4F3), borderRadius: BorderRadius.circular(9)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 11, color: kSub),
+          const SizedBox(width: 4),
+          Text(text,
+              style: const TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF465B55),
+                  fontFeatures: [FontFeature.tabularFigures()])),
+        ]),
+      );
 }
 
 class _Empty extends StatelessWidget {

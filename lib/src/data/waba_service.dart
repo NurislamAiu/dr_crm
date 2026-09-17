@@ -155,6 +155,33 @@ class WabaService {
     });
   }
 
+  /// Разослать одобренный шаблон списку получателей.
+  ///
+  /// [recipients] — номер, имя и значения переменных {{1}}, {{2}}… в порядке
+  /// их номеров. Сервер ставит всё в очередь с паузой [gapSec] между
+  /// отправками (анти-бан) и возвращает, сколько принято.
+  Future<({int queued, int skipped, int minutes})> sendTemplate({
+    required String templateId,
+    required String body,
+    required List<({String phone, String name, List<String> values})> recipients,
+    int gapSec = 20,
+  }) async {
+    final res = await _fn.httpsCallable('sendWabaTemplate').call<Map<Object?, Object?>>({
+      'templateId': templateId,
+      'body': body,
+      'gapSec': gapSec,
+      'recipients': [
+        for (final r in recipients) {'phone': r.phone, 'name': r.name, 'values': r.values},
+      ],
+    });
+    final d = res.data;
+    return (
+      queued: (d['queued'] as num?)?.toInt() ?? 0,
+      skipped: (d['skipped'] as num?)?.toInt() ?? 0,
+      minutes: (d['minutes'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// Текущие настройки WABA.
   Stream<WabaSettings> watchSettings() =>
       _db.collection('config').doc('waba').snapshots().map((s) => WabaSettings.fromMap(s.data() ?? {}));

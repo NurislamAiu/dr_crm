@@ -16,7 +16,9 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+5
+version: 2.0.0+19
+
+
 
 environment:
   sdk: ^3.12.1
@@ -48,6 +50,7 @@ dependencies:
   record: ^6.0.0             # запись голосовых (6.x: record_linux реализует новый интерфейс)
   path_provider: ^2.1.5      # временный путь для записи
   just_audio: ^0.9.42        # встроенное проигрывание голосовых/аудио
+  audio_session: ^0.1.25     # режим воспроизведения: динамик, работа при беззвучном
   firebase_core: ^3.6.0      # инициализация Firebase (VIP-клиенты)
   cloud_firestore: ^5.4.4    # Firestore: коллекция clients (VIP)
   firebase_auth: ^5.3.1      # вход менеджеров (миграция backend на Firebase)
@@ -56,6 +59,7 @@ dependencies:
   iconsax: ^0.0.8
   fake_cloud_firestore: ^3.1.0
   firebase_messaging: ^15.2.10
+  pdfx: ^2.9.2
 
 dev_dependencies:
   flutter_test:
@@ -83,6 +87,23 @@ flutter:
   # Вся папка assets: флаги + vip.png (аватар VIP-чатов) и будущие изображения.
   assets:
     - assets/
+    - assets/prank/
+    - assets/chat_bg/
+
+  # Inter лежит в проекте: приложение не должно ходить в сеть за шрифтом.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Inter-ExtraBold.ttf
+          weight: 800
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

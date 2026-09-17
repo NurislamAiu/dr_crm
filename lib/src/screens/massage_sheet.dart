@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../design/design.dart';
 import '../models/massage.dart';
 import '../state/providers.dart';
 import 'soft_ui.dart';
@@ -137,6 +138,7 @@ class _MassageSheetState extends ConsumerState<MassageSheet> {
         await repo.create(lead, createdBy: ref.read(appConfigProvider).userId);
       }
       if (!mounted) return;
+      Haptics.success();
       Navigator.of(context).pop();
       final n = _nextNumber != null ? ' №$_nextNumber' : '';
       ScaffoldMessenger.of(context).showSnackBar(
@@ -149,6 +151,7 @@ class _MassageSheetState extends ConsumerState<MassageSheet> {
       );
     } catch (e) {
       if (!mounted) return;
+      Haptics.error();
       setState(() => _saving = false);
       final msg = e is FirebaseException ? 'Firestore: ${e.code}' : 'Не сохранено: $e';
       ScaffoldMessenger.of(context).showSnackBar(

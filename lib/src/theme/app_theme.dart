@@ -4,26 +4,28 @@ import 'package:flutter/services.dart';
 /// Дизайн-система приложения: цвета, градиенты, светлая/тёмная темы.
 /// Меняет ТОЛЬКО оформление — на логику не влияет.
 class AppColors {
-  static const brandStart = Color(0xFF13B7A4); // бирюзовый
-  static const brandEnd = Color(0xFF1FBF8F); // зелёный
-  static const brand = Color(0xFF13B0A0);
+  // Переведено на палитру дизайн-системы (design/tokens.dart): экраны,
+  // которые ещё не перенесены на токены, выглядят заодно с новой темой.
+  static const brandStart = Color(0xFF0A84FF);
+  static const brandEnd = Color(0xFF5E5CE6);
+  static const brand = Color(0xFF0A84FF);
 
   // Светлая
-  static const lightScaffold = Color(0xFFEFF3F2);
+  static const lightScaffold = Color(0xFFF2F2F7);
   static const lightSurface = Color(0xFFFFFFFF);
   static const lightBubbleIn = Color(0xFFFFFFFF);
-  static const lightChatTop = Color(0xFFECF3F1);
-  static const lightChatBottom = Color(0xFFE6EEF0);
-  static const lightTextPrimary = Color(0xFF0F1B22);
+  static const lightChatTop = Color(0xFFF2F2F7);
+  static const lightChatBottom = Color(0xFFEDEDF2);
+  static const lightTextPrimary = Color(0xFF000000);
   static const lightTextSecondary = Color(0xFF64757F);
 
   // Тёмная
-  static const darkScaffold = Color(0xFF0B141A);
-  static const darkSurface = Color(0xFF141F26);
-  static const darkCard = Color(0xFF1B2A32);
+  static const darkScaffold = Color(0xFF000000);
+  static const darkSurface = Color(0xFF1C1C1E);
+  static const darkCard = Color(0xFF2C2C2E);
   static const darkBubbleIn = Color(0xFF1F2C34);
-  static const darkChatTop = Color(0xFF0C161C);
-  static const darkChatBottom = Color(0xFF0A1216);
+  static const darkChatTop = Color(0xFF000000);
+  static const darkChatBottom = Color(0xFF0A0A0C);
   static const darkTextPrimary = Color(0xFFE6ECEF);
   static const darkTextSecondary = Color(0xFF8CA0AB);
 }
@@ -49,10 +51,13 @@ LinearGradient avatarGradient(String seed) {
   return LinearGradient(colors: palettes[idx], begin: Alignment.topLeft, end: Alignment.bottomRight);
 }
 
-/// Флаг страны по номеру: Казахстан (+7 7xx) → kz.png, остальные → rus.png.
+/// Флаг страны по номеру: Казахстан (+7 6xx / +7 7xx) → kz.png,
+/// остальные российские +7 → rus.png. Другие коды стран решает вызывающий
+/// (в Telegram-чатах для них показывается глобус, не флаг).
 String flagAsset(String label) {
   final digits = label.replaceAll(RegExp(r'\D'), '');
-  return digits.startsWith('77') ? 'assets/kz.png' : 'assets/rus.png';
+  final kz = digits.startsWith('77') || digits.startsWith('76');
+  return kz ? 'assets/kz.png' : 'assets/rus.png';
 }
 
 /// Глиф для аватара БЕЗ персональных данных — только KZ или RUS.
@@ -170,5 +175,16 @@ class AppSemanticColors extends ThemeExtension<AppSemanticColors> {
 }
 
 extension AppThemeX on BuildContext {
-  AppSemanticColors get semantic => Theme.of(this).extension<AppSemanticColors>()!;
+  /// Доп. цвета темы. Если расширение не подключено (тема собрана мимо
+  /// buildAppTheme), отдаём значения по яркости, а не падаем на `!`.
+  AppSemanticColors get semantic {
+    final theme = Theme.of(this);
+    final ext = theme.extension<AppSemanticColors>();
+    if (ext != null) return ext;
+    final dark = theme.brightness == Brightness.dark;
+    return AppSemanticColors(
+      textSecondary: dark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+      bubbleIn: dark ? AppColors.darkBubbleIn : AppColors.lightBubbleIn,
+    );
+  }
 }

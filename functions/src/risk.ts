@@ -92,12 +92,23 @@ const digits = (s: string) => s.replace(/\D/g, "");
  * Признаки по самому тексту (без обращений к базе). Вынесено отдельно, чтобы
  * тем же кодом разбирать историю переписки (riskBackfill).
  */
-export function textFlags(text: string, allow: string[], chatId: string): RiskKind[] {
+export function textFlags(text: string, allow: string[], chatId: string, allowCards: string[] = []): RiskKind[] {
   const kinds: RiskKind[] = [];
-  if (RE_CARD.test(text) || RE_IBAN.test(text) || (RE_PAY.test(text) && /\d{8,}/.test(text))) {
+  // Цифры внутри ссылок — не реквизиты. Id точки 2ГИС в шаблоне с адресом
+  // (17 цифр подряд) выглядел для правил как номер карты и чужой телефон
+  // сразу — каждая отправка адреса давала ложную «важную» тревогу, и журнал
+  // тонул в шуме.
+  const noUrls = text.replace(/(?:https?:\/\/|www\.)\S+/gi, " ");
+  // Свои карты клиники (config/risk.allowedCards) нарушением не считаются:
+  // менеджеры легально шлют реквизиты предоплаты много раз в день.
+  let scrubbed = noUrls;
+  for (const m of noUrls.match(new RegExp(RE_CARD.source, "g")) ?? []) {
+    if (allowCards.includes(digits(m))) scrubbed = scrubbed.split(m).join("");
+  }
+  if (RE_CARD.test(scrubbed) || RE_IBAN.test(scrubbed) || (RE_PAY.test(scrubbed) && /\d{8,}/.test(scrubbed))) {
     kinds.push("card");
   }
-  const found = text.match(RE_PHONE) ?? [];
+  const found = noUrls.match(RE_PHONE) ?? [];
   if (found.length) {
     const outside = found
       .map(digits)
@@ -168,6 +179,23 @@ async function allowedPhones(): Promise<string[]> {
       .map(digits)
       .filter((x) => x.length >= 10);
     allowCache = { phones: list, at: Date.now() };
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+/** Свои карты клиники (config/risk.allowedCards) — не «слив реквизитов». */
+let cardCache: { cards: string[]; at: number } | null = null;
+export async function loadAllowedCards(): Promise<string[]> {
+  if (cardCache && Date.now() - cardCache.at < CACHE_TTL) return cardCache.cards;
+  try {
+    const d = (await db().doc("config/risk").get()).data();
+    const list = ((d?.allowedCards ?? []) as unknown[])
+      .filter((x): x is string => typeof x === "string")
+      .map(digits)
+      .filter((x) => x.length >= 13);
+    cardCache = { cards: list, at: Date.now() };
     return list;
   } catch {
     return [];
@@ -292,7 +320,7 @@ export async function auditOutbound(p: {
     if (p.cold) kinds.push("cold");
 
     // Реквизиты карты/Kaspi и посторонний номер телефона в тексте.
-    kinds.push(...textFlags(text, await allowedPhones(), p.chatId));
+    kinds.push(...textFlags(text, await allowedPhones(), p.chatId, await loadAllowedCards()));
 
     if (p.cold && hasLink(text)) kinds.push("link");
     if (isNight(new Date())) kinds.push("night");

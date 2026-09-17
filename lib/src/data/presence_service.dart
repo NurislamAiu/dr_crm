@@ -18,19 +18,35 @@ class FirebasePresenceService {
   Timer? _hb;
   String? _uid;
   String? _name;
+  bool _hidden = false;
   DocumentReference<Map<String, dynamic>>? _session;
 
   CollectionReference<Map<String, dynamic>> get _col => _db.collection('presence');
   CollectionReference<Map<String, dynamic>> get _sessions => _db.collection('workSessions');
 
-  void start(String uid, String name) {
+  /// hidden — «невидимка»: присутствие не публикуется, другие менеджеры не
+  /// видят этот аккаунт в списке «в сети». Рабочие сессии при этом пишутся
+  /// как обычно — это внутренняя аналитика «когда зашёл/вышел», а не
+  /// публичный статус.
+  void start(String uid, String name, {bool hidden = false}) {
+    // Повторный start того же менеджера — только отметка «онлайн», БЕЗ
+    // пересоздания таймера и без новой workSession: системный resumed может
+    // приходить сериями (Samsung), иначе плодятся тысячи пустых сессий.
+    if (_uid == uid && _hb != null) {
+      if (!hidden) _write(true);
+      return;
+    }
     _uid = uid;
     _name = name;
-    _write(true);
+    _hidden = hidden;
+    // У невидимки гасим возможный «залипший» онлайн от прошлого входа: без
+    // этого документ с online:true прожил бы ещё до двух минут (столько
+    // держится свежесть lastSeen в watch), и нас всё равно увидели бы в сети.
+    _write(!hidden);
     _openSession();
     _hb?.cancel();
     _hb = Timer.periodic(const Duration(seconds: 45), (_) {
-      _write(true);
+      if (!_hidden) _write(true);
       _touchSession();
     });
   }

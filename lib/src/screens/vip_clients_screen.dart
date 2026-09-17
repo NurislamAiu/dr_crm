@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:iconsax/iconsax.dart';
 
+import '../design/design.dart';
 import '../models/vip_client.dart';
 import '../state/providers.dart';
 import 'archive_actions.dart';
@@ -10,7 +11,7 @@ import 'day_utils.dart';
 import 'soft_ui.dart';
 import 'vip_client_sheet.dart';
 
-const _pageBg = Color(0xFFF7F6F7);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 const _vipRed = Color(0xFFE23744);
 const _vipRedDark = Color(0xFFB81F2D);
 
@@ -190,7 +191,7 @@ class _VipClientsScreenState extends ConsumerState<VipClientsScreen> {
                 child: Container(
                   transform: Matrix4.translationValues(0, -22, 0),
                   decoration: const BoxDecoration(color: _pageBg, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-                  child: !vipsAsync.hasValue ? const Center(child: CircularProgressIndicator()) : _sheet(clients, inWork),
+                  child: !vipsAsync.hasValue ? const SkeletonList() : _sheet(clients, inWork),
                 ),
               ),
             ],
@@ -250,7 +251,7 @@ class _VipClientsScreenState extends ConsumerState<VipClientsScreen> {
     final grouped = _filterDate == null;
     final rows = grouped ? groupByDay<VipClient>(clients, vipDate) : clients.cast<Object>().toList();
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(15, 2, 15, 24),
+      padding: EdgeInsets.fromLTRB(15, 2, 15, 24 + MediaQuery.paddingOf(context).bottom),
       itemCount: rows.length,
       itemBuilder: (context, i) {
         final row = rows[i];

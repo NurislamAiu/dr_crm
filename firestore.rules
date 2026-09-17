@@ -38,6 +38,11 @@ service cloud.firestore {
     }
     match /conversations/{id} {
       allow read, write: if isManager();
+      // История назначений ответственного (Telegram): пишет только сервер.
+      match /history/{hid} {
+        allow read: if isManager();
+        allow write: if false;
+      }
     }
     match /messages/{id} {
       allow read, write: if isManager();
@@ -56,8 +61,18 @@ service cloud.firestore {
     match /counters/{id} {
       allow read, write: if isManager();
     }
+    // Розыгрыш: картинку менеджеру ставит админ, читает менеджер только свою.
+    match /pranks/{uid} {
+      allow read: if isManager() && request.auth.uid == uid;
+      allow write: if isAdmin();
+    }
+
+    // Шаблоны быстрых ответов общие для всех. Менеджер может добавить и
+    // поправить, а удалить — только админ: удалённый шаблон пропадает сразу
+    // у всех менеджеров (вместе с серверными вариантами текста к нему).
     match /quickReplies/{id} {
-      allow read, write: if isManager();
+      allow read, create, update: if isManager();
+      allow delete: if isAdmin();
     }
 
     // Настройки (автоответчик и т.п.) — только менеджеры.
@@ -76,9 +91,21 @@ service cloud.firestore {
       allow read: if isManager();
       allow write: if false;
     }
+    // Задержка «человечной» отправки WhatsApp (sendDelaySec) — правит админ:
+    // менеджер не должен уметь выставить 0 и получить бан номера.
+    match /config/wazzup {
+      allow read: if isManager();
+      allow write: if isAdmin();
+    }
+    // Автоответ WhatsApp на первое обращение — правит только админ:
+    // это сообщения, которые уходят клиентам без участия менеджера.
+    match /config/waAutoReply {
+      allow read: if isManager();
+      allow write: if isAdmin();
+    }
     match /config/{id} {
       allow read: if isManager();
-      allow write: if isManager() && !(id in ['risk', 'channel', 'waba']);
+      allow write: if isManager() && !(id in ['risk', 'channel', 'waba', 'wazzup', 'waAutoReply']);
     }
 
     // Присутствие: читают менеджеры, пишет только сам о себе.
@@ -108,15 +135,11 @@ service cloud.firestore {
       allow read, write: if isManager();
     }
 
-    // Серверная рассылка: создаёт только админ, обрабатывает Cloud Function.
-    // Клиент может лишь остановить (status='stopped').
+    // Рассылки отключены (2026-08-09): экран удалён из приложения, обработчик
+    // снят с деплоя. Историю оставляем на чтение, создавать новые нельзя.
     match /broadcasts/{id} {
       allow read: if isManager();
-      allow create: if isAdmin() && request.resource.data.createdBy == request.auth.uid;
-      allow update: if isAdmin()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-        && request.resource.data.status == 'stopped';
-      allow delete: if false;
+      allow write: if false;
     }
 
     // Контроль подозрительной активности: пишет только сервер (Admin SDK),
@@ -134,6 +157,26 @@ service cloud.firestore {
     match /outbox/{id} {
       allow read: if isManager();
       allow write: if false;
+    }
+
+    // Telegram: сырые апдейты вебхука (дедуп по update_id) — только сервер,
+    // читать может админ для диагностики.
+    match /tgUpdates/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Telegram: очередь ретраев отправки (429 retry_after) — только сервер.
+    match /tgOutbox/{id} {
+      allow read: if isManager();
+      allow write: if false;
+    }
+
+    // Удалённая диагностика устройств: каждый пишет только свой журнал,
+    // читает админ (и сервер через tgSetup?action=clientlogs).
+    match /clientLogs/{uid} {
+      allow read: if isAdmin();
+      allow write: if signedIn() && request.auth.uid == uid;
     }
 
     // Всё остальное — запрещено.

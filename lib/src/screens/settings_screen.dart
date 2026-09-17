@@ -1,17 +1,20 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:iconsax/iconsax.dart';
 
 import '../state/providers.dart';
 import 'analytics_screen.dart';
-import 'autoreply_screen.dart';
+import 'files_screen.dart';
 import 'quick_replies_screen.dart';
 import 'firebase_managers_screen.dart';
 import 'managers_screen.dart';
 import 'soft_ui.dart';
+import 'waba_broadcast_screen.dart';
 import 'waba_screen.dart';
 
-const _pageBg = Color(0xFFF1F8F6);
+const _pageBg = Color(0xFFF2F2F7); // surface дизайн-системы
 
 /// Настройки — «мягкий» стиль: профиль менеджера в шапке, карточки-разделы.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -87,7 +90,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
               ),
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(15, 22, 15, 28),
+                padding: EdgeInsets.fromLTRB(15, 22, 15, 28 + MediaQuery.paddingOf(context).bottom),
                 children: [
                   if (_isAdmin && config.isFirebase)
                     _navCard(
@@ -111,6 +114,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                       ),
                     ),
+                  // Канал WhatsApp: обычный номер (QR) или WABA + шаблоны Meta.
+                  // Приветствие Telegram-бота правится в Firestore:
+                  // config/telegram.
                   if (_isAdmin && config.isFirebase)
                     _navCard(
                       icon: Iconsax.verify,
@@ -121,14 +127,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         MaterialPageRoute(builder: (_) => const WabaScreen()),
                       ),
                     ),
+                  // «Автоответчик» убран: в WhatsApp на все входящие отвечают
+                  // менеджеры сами (решение владельца). Автоматика осталась
+                  // только в Telegram — тексты бота в config/telegram.
+                  // Рассылка одобренным шаблоном Meta: единственный законный
+                  // способ написать первым тем, кто давно молчит.
                   if (_isAdmin && config.isFirebase)
                     _navCard(
-                      icon: Iconsax.message_time,
-                      color: const Color(0xFFB07A10),
-                      title: 'Автоответчик',
-                      subtitle: 'Автоответ на входящие и пропущенные звонки',
+                      icon: Iconsax.send_2,
+                      color: const Color(0xFF23A35F),
+                      title: 'Рассылка',
+                      subtitle: 'Шаблон WhatsApp Business по списку или по записям на день',
                       onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const AutoReplyScreen()),
+                        MaterialPageRoute(builder: (_) => const WabaBroadcastScreen()),
+                      ),
+                    ),
+                  if (_isAdmin && config.isFirebase)
+                    _navCard(
+                      icon: Icons.telegram,
+                      color: const Color(0xFF229ED9),
+                      title: 'Номера из переписки',
+                      subtitle: 'Проставить клиентам номера, написанные текстом в чатах',
+                      onTap: () => _runFixNames(context),
+                    ),
+                  // Поиск вложений по дням: кто прислал PDF (чек, заключение)
+                  // или фото — с фильтром по стране номера.
+                  if (config.isFirebase)
+                    _navCard(
+                      icon: Iconsax.document_text,
+                      color: const Color(0xFFC6403C),
+                      title: 'Файлы из чатов',
+                      subtitle: 'Кто прислал PDF или фото — поиск по дням',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const FilesScreen()),
                       ),
                     ),
                   _navCard(
@@ -142,6 +173,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   if (config.isFirebase && config.userId != null) _NotifyToggleCard(uid: config.userId!),
                   if (config.isFirebase) const _ChannelCard(),
+                  // Отвечать некому (отпуск, праздники) — переключатель на
+                  // это касается ВСЕХ клиентов, поэтому только у админа.
+                  if (_isAdmin && config.isFirebase) const _VacationReplyCard(),
+                  if (_isAdmin && config.isFirebase) const _AiReplyCard(),
                   if (_isAdmin && config.isFirebase) const _SingleSessionCard(),
                   const SizedBox(height: 4),
                   SizedBox(
@@ -173,6 +208,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  /// Ремонт Telegram-чатов по кнопке (только админ): имена чатов = номера,
+  /// плюс подтягиваются номера, написанные клиентами текстом в переписке.
+  Future<void> _runFixNames(BuildContext context) async {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Обновляю номера…')));
+    try {
+      final res = await FirebaseFunctions.instanceFor(region: 'europe-west1')
+          .httpsCallable('tgFixNames')
+          .call<Map<String, dynamic>>({});
+      final fixedCount = (res.data['fixedCount'] as num?)?.toInt() ?? 0;
+      final scanned = (res.data['scanned'] as num?)?.toInt() ?? 0;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(fixedCount == 0
+            ? 'Все чаты уже в порядке (проверено: $scanned)'
+            : 'Обновлено чатов: $fixedCount (проверено: $scanned)'),
+      ));
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не получилось: $e')));
+    }
   }
 
   Widget _navCard({
@@ -431,6 +488,249 @@ class _SingleSessionCard extends ConsumerWidget {
                 },
               ),
       ]),
+    );
+  }
+}
+
+/// Автоответ «недоступны» на дни, когда отвечать некому (отпуск, праздники).
+///
+/// Пока включён, каждому НОВОМУ обращению (первый /start в Telegram, первое
+/// сообщение в WhatsApp) уходит этот текст вместо обычного приветствия —
+/// существующей переписки переключатель не касается, это не рассылка.
+class _VacationReplyCard extends StatefulWidget {
+  const _VacationReplyCard();
+
+  @override
+  State<_VacationReplyCard> createState() => _VacationReplyCardState();
+}
+
+class _VacationReplyCardState extends State<_VacationReplyCard> {
+  static const _defaultText = 'Добрый день!\n\n'
+      'Извините, с 21 по 23 августа не сможем вам ответить.\n'
+      'Напишите ваш вопрос — менеджер свяжется с вами позже.';
+
+  final _controller = TextEditingController();
+  bool _loadedOnce = false;
+  bool _dirty = false;
+  bool _saving = false;
+
+  DocumentReference<Map<String, dynamic>> get _doc =>
+      FirebaseFirestore.instance.collection('config').doc('vacationReply');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _setEnabled(bool v) async {
+    try {
+      await _doc.set({'enabled': v, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(v
+                ? 'Включено: новым обращениям уходит это сообщение'
+                : 'Выключено: новым обращениям снова уходит обычное приветствие'),
+            duration: const Duration(seconds: 2),
+          ));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    }
+  }
+
+  Future<void> _saveText() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _saving) return;
+    setState(() => _saving = true);
+    try {
+      await _doc.set({'text': text, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      if (mounted) {
+        setState(() => _dirty = false);
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('Текст сохранён'), duration: Duration(seconds: 2)));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _doc.snapshots(),
+      builder: (context, snap) {
+        final d = snap.data?.data();
+        final on = d?['enabled'] == true;
+        final remoteText = (d?['text'] as String? ?? '').trim();
+        // Текст из базы подставляем в поле только один раз при загрузке —
+        // дальше это поле принадлежит менеджеру, а не стриму.
+        if (!_loadedOnce && snap.hasData) {
+          _loadedOnce = true;
+          _controller.text = remoteText.isNotEmpty ? remoteText : _defaultText;
+        }
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 14, offset: const Offset(0, 4))],
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: (on ? const Color(0xFFC0447B) : kSub).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(Icons.beach_access_rounded, size: 21, color: on ? const Color(0xFFC0447B) : kSub),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Автоответ «недоступны»', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kInk)),
+                  const SizedBox(height: 2),
+                  Text(
+                    on
+                        ? 'Включено — новым обращениям уходит это вместо приветствия'
+                        : 'Выключено — работает обычное приветствие',
+                    maxLines: 2,
+                    style: const TextStyle(fontSize: 12.5, color: kSub),
+                  ),
+                ]),
+              ),
+              Switch(
+                value: on,
+                activeThumbColor: Colors.white,
+                activeTrackColor: const Color(0xFFC0447B),
+                onChanged: _setEnabled,
+              ),
+            ]),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              minLines: 3,
+              maxLines: 6,
+              onChanged: (_) {
+                if (!_dirty) setState(() => _dirty = true);
+              },
+              style: const TextStyle(fontSize: 13.5, color: kInk),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: const Color(0xFFF2F5F7),
+                contentPadding: const EdgeInsets.all(12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                hintText: 'Текст сообщения…',
+              ),
+            ),
+            if (_dirty) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: kTeal),
+                  onPressed: _saving ? null : _saveText,
+                  child: _saving
+                      ? const SizedBox(
+                          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('Сохранить текст'),
+                ),
+              ),
+            ],
+          ]),
+        );
+      },
+    );
+  }
+}
+
+/// Черновик ответа от ИИ (Claude Haiku) на первое сообщение нового чата.
+///
+/// ИИ ничего не отправляет клиенту сам — только предлагает текст менеджеру
+/// прямо в переписке, тот решает: отправить, поправить или скрыть. База
+/// знаний — реальные тексты быстрых ответов, цена подставляется по
+/// гражданству номера (Казахстан — «Прайс», остальные — цена для других
+/// стран). Тема «Обучение»/«БАДы» ИИ не касается — там свой сценарий.
+class _AiReplyCard extends StatelessWidget {
+  const _AiReplyCard();
+
+  DocumentReference<Map<String, dynamic>> get _doc =>
+      FirebaseFirestore.instance.collection('config').doc('aiReply');
+
+  Future<void> _setEnabled(BuildContext context, bool v) async {
+    try {
+      await _doc.set({'enabled': v, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(v
+                ? 'Включено: на первое сообщение новых чатов ИИ будет предлагать черновик'
+                : 'Выключено: черновиков от ИИ больше не будет'),
+            duration: const Duration(seconds: 2),
+          ));
+      }
+    } catch (e) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _doc.snapshots(),
+      builder: (context, snap) {
+        final on = snap.data?.data()?['enabled'] == true;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 14, offset: const Offset(0, 4))],
+          ),
+          child: Row(children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: (on ? const Color(0xFF5A4FCF) : kSub).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(Iconsax.magic_star, size: 21, color: on ? const Color(0xFF5A4FCF) : kSub),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Черновик от ИИ', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kInk)),
+                const SizedBox(height: 2),
+                Text(
+                  on
+                      ? 'Включено — предлагает ответ на первое сообщение новых чатов, менеджер подтверждает'
+                      : 'Выключено — менеджеры отвечают сами, как раньше',
+                  maxLines: 2,
+                  style: const TextStyle(fontSize: 12.5, color: kSub),
+                ),
+              ]),
+            ),
+            Switch(
+              value: on,
+              activeThumbColor: Colors.white,
+              activeTrackColor: const Color(0xFF5A4FCF),
+              onChanged: (v) => _setEnabled(context, v),
+            ),
+          ]),
+        );
+      },
     );
   }
 }
